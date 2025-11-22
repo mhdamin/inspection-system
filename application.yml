@@ -1,0 +1,32 @@
+aws:
+  s3:
+    access-key: ${AWS_ACCESS_KEY}
+    secret-key: ${AWS_SECRET_KEY}
+    region: ap-southeast-1
+    bucket-name: muvs-inspection-images
+
+spring:
+
+  h2:
+
+    console:
+
+      enabled: true
+
+  datasource:
+
+    url: jdbc:h2:mem:testdb
+
+    driverClassName: org.h2.Driver
+
+    username: sa
+
+    password: 
+
+  jpa:
+
+    database-platform: org.hibernate.dialect.H2Dialect
+
+    hibernate:
+
+      ddl-auto: update
