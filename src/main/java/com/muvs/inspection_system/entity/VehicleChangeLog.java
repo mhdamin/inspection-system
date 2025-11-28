@@ -28,10 +28,10 @@ public class VehicleChangeLog {
     @Column(name = "change_type", nullable = false, length = 20)
     private ChangeType changeType;
     
-    @Column(name = "old_vehicle_plate", nullable = false, length = 50)
+    @Column(name = "old_vehicle_plate", length = 50)
     private String oldVehiclePlate;
-    
-    @Column(name = "new_vehicle_plate", nullable = false, length = 50)
+
+    @Column(name = "new_vehicle_plate", length = 50)
     private String newVehiclePlate;
     
     @Column(name = "reason", nullable = false, columnDefinition = "TEXT")

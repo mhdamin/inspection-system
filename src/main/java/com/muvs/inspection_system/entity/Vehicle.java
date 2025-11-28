@@ -2,10 +2,7 @@ package com.muvs.inspection_system.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,6 +11,7 @@ import java.util.List;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(callSuper = false)
 @Entity
 @Table(name = "vehicles")
 public class Vehicle extends BaseEntity {
@@ -27,7 +25,7 @@ public class Vehicle extends BaseEntity {
     @Column(name = "manufacturer", nullable = false, length = 100)
     private String manufacturer;
     
-    @Column(name = "year", nullable = false)
+    @Column(name = "`year`", nullable = false)
     private Integer year;
     
     @Column(name = "status", nullable = false, length = 50)

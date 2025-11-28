@@ -3,10 +3,14 @@ package com.muvs.inspection_system.service.impl;
 import com.muvs.inspection_system.dto.*;
 import com.muvs.inspection_system.entity.Checklist;
 import com.muvs.inspection_system.entity.SubChecklist;
+import com.muvs.inspection_system.entity.Vehicle;
+import com.muvs.inspection_system.entity.VehicleChangeLog;
+import com.muvs.inspection_system.enums.ChangeType;
 import com.muvs.inspection_system.enums.SubChecklistType;
 import com.muvs.inspection_system.exception.ResourceNotFoundException;
 import com.muvs.inspection_system.repository.ChecklistRepository;
 import com.muvs.inspection_system.repository.SubChecklistRepository;
+import com.muvs.inspection_system.repository.VehicleChangeLogRepository;
 import com.muvs.inspection_system.repository.VehicleRepository;
 import com.muvs.inspection_system.service.SubChecklistService;
 import lombok.RequiredArgsConstructor;
@@ -25,10 +29,11 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class SubChecklistServiceImpl implements SubChecklistService {
-    
+
     private final SubChecklistRepository subChecklistRepository;
     private final ChecklistRepository checklistRepository;
     private final VehicleRepository vehicleRepository;
+    private final VehicleChangeLogRepository vehicleChangeLogRepository;
     
     @Override
     @Transactional
@@ -75,14 +80,13 @@ public class SubChecklistServiceImpl implements SubChecklistService {
         try {
             SubChecklist savedSubChecklist = subChecklistRepository.save(subChecklist);
             log.info("Sub-checklist created successfully with ID: {}", savedSubChecklist.getId());
-            
-            // TODO: Create VehicleChangeLog when type is TEMPORARY or PERMANENT
-            // This should be integrated when VehicleChangeLog module is implemented
+
+            // Create VehicleChangeLog when type is TEMPORARY or PERMANENT
             if (dto.getType() == SubChecklistType.TEMPORARY || dto.getType() == SubChecklistType.PERMANENT) {
-                log.info("TODO: Create VehicleChangeLog for sub-checklist type: {}", dto.getType());
-                // createVehicleChangeLog(savedSubChecklist, checklist);
+                log.info("Creating VehicleChangeLog for sub-checklist type: {}", dto.getType());
+                createVehicleChangeLog(savedSubChecklist, checklist);
             }
-            
+
             return savedSubChecklist.getId();
         } catch (DataIntegrityViolationException e) {
             log.error("Duplicate sub-checklist number detected: {}", subChecklistNumber);
@@ -182,16 +186,62 @@ public class SubChecklistServiceImpl implements SubChecklistService {
     @Transactional
     public void deleteSubChecklist(UUID id) {
         log.info("Deleting sub-checklist with ID: {}", id);
-        
+
         if (!subChecklistRepository.existsById(id)) {
             throw new ResourceNotFoundException("Sub-checklist not found with ID: " + id);
         }
-        
+
         // Note: VehicleChangeLog records should be preserved for audit history
         subChecklistRepository.deleteById(id);
         log.info("Sub-checklist deleted successfully with ID: {}", id);
     }
-    
+
+    /**
+     * Create VehicleChangeLog entry when vehicle is changed (TEMPORARY or PERMANENT)
+     * This tracks the vehicle change history for audit and reporting purposes.
+     */
+    private void createVehicleChangeLog(SubChecklist subChecklist, Checklist checklist) {
+        // Get the original vehicle from the parent checklist
+        Vehicle originalVehicle = checklist.getVehicle();
+        String oldVehiclePlate = originalVehicle != null ? originalVehicle.getPlateNumber() : null;
+
+        // Get the new vehicle from the sub-checklist
+        String newVehiclePlate = null;
+        if (subChecklist.getVehicleId() != null) {
+            Vehicle newVehicle = vehicleRepository.findById(subChecklist.getVehicleId())
+                    .orElse(null);
+            newVehiclePlate = newVehicle != null ? newVehicle.getPlateNumber() : null;
+        }
+
+        // Map SubChecklistType to ChangeType (they have the same enum values)
+        ChangeType changeType = ChangeType.valueOf(subChecklist.getType().name());
+
+        // Use remarks as reason, or provide a default reason based on change type
+        String reason = subChecklist.getRemarks();
+        if (reason == null || reason.trim().isEmpty()) {
+            reason = switch (changeType) {
+                case TEMPORARY -> "Temporary vehicle replacement";
+                case PERMANENT -> "Permanent vehicle change";
+                case RETURN -> "Vehicle returned";
+            };
+        }
+
+        // Create the VehicleChangeLog entry
+        VehicleChangeLog changeLog = VehicleChangeLog.builder()
+                .changeType(changeType)
+                .oldVehiclePlate(oldVehiclePlate)
+                .newVehiclePlate(newVehiclePlate)
+                .reason(reason)
+                .timestamp(subChecklist.getTimestamp())
+                .staffName(subChecklist.getStaffName())
+                .checklist(checklist)
+                .build();
+
+        vehicleChangeLogRepository.save(changeLog);
+        log.info("VehicleChangeLog created: {} from {} to {} - {}",
+                changeType, oldVehiclePlate, newVehiclePlate, reason);
+    }
+
     /**
      * Generate a unique sub-checklist number based on parent checklist number
      * Format: <parentChecklistNumber>-SUB-<timestamp>
