@@ -4,10 +4,12 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.util.StringUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3ClientBuilder;
 
 @Data
 @Configuration
@@ -21,11 +23,14 @@ public class AwsS3Config {
     
     @Bean
     public S3Client s3Client() {
-        AwsBasicCredentials awsCredentials = AwsBasicCredentials.create(accessKey, secretKey);
-        
-        return S3Client.builder()
-                .region(Region.of(region))
-                .credentialsProvider(StaticCredentialsProvider.create(awsCredentials))
-                .build();
+        S3ClientBuilder builder = S3Client.builder()
+                .region(Region.of(region));
+
+        if (StringUtils.hasText(accessKey) && StringUtils.hasText(secretKey)) {
+            AwsBasicCredentials awsCredentials = AwsBasicCredentials.create(accessKey, secretKey);
+            builder.credentialsProvider(StaticCredentialsProvider.create(awsCredentials));
+        }
+
+        return builder.build();
     }
 }

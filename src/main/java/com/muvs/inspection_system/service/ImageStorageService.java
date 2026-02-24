@@ -12,6 +12,7 @@ import software.amazon.awssdk.services.s3.model.*;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -19,7 +20,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ImageStorageService {
     
-    private final S3Client s3Client;
+    private final Optional<S3Client> s3Client;
     private final AwsS3Config awsS3Config;
     
     /**
@@ -43,7 +44,7 @@ public class ImageStorageService {
                     .contentLength(file.getSize())
                     .build();
             
-            s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+            getRequiredS3Client().putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
             
             String fileUrl = getFileUrl(key);
             log.info("File uploaded successfully: {}", fileUrl);
@@ -69,7 +70,7 @@ public class ImageStorageService {
                     .key(key)
                     .build();
             
-            s3Client.deleteObject(deleteObjectRequest);
+            getRequiredS3Client().deleteObject(deleteObjectRequest);
             log.info("File deleted successfully from S3: {}", key);
         } catch (S3Exception e) {
             log.error("Failed to delete file from S3: {}", e.getMessage(), e);
@@ -117,5 +118,10 @@ public class ImageStorageService {
             return parts[1];
         }
         throw new IllegalArgumentException("Invalid S3 URL format: " + url);
+    }
+
+    private S3Client getRequiredS3Client() {
+        return s3Client.orElseThrow(() ->
+                new IllegalStateException("S3 is not configured. Set AWS_ACCESS_KEY and AWS_SECRET_KEY to enable image upload."));
     }
 }
