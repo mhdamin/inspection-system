@@ -23,8 +23,9 @@ public class AwsS3Config {
     
     @Bean
     public S3Client s3Client() {
+        String resolvedRegion = StringUtils.hasText(region) ? region : "ap-southeast-1";
         S3ClientBuilder builder = S3Client.builder()
-                .region(Region.of(region));
+                .region(Region.of(resolvedRegion));
 
         if (StringUtils.hasText(accessKey) && StringUtils.hasText(secretKey)) {
             AwsBasicCredentials awsCredentials = AwsBasicCredentials.create(accessKey, secretKey);
