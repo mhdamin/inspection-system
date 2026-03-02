@@ -1,0 +1,73 @@
+# ========================================
+# .dockerignore for Backend (Root)
+# ========================================
+# This file tells Docker which files to ignore when building images
+# Reduces build context size and speeds up builds
+# ========================================
+
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Documentation (not needed in image)
+*.md
+!README.md
+docs/
+.claude/
+
+# Frontend (not needed in backend image)
+frontend/
+node_modules/
+
+# Logs
+logs/
+*.log
+
+# Test files
+src/test/
+coverage/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Docker files (don't need these in the image)
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
