@@ -44,35 +44,54 @@ public class DataLoader implements CommandLineRunner {
     public void run(String... args) throws Exception {
         log.info("Starting data loading...");
 
-        // Create Roles
-        Role adminRole = roleRepository.save(Role.builder().name("ROLE_ADMIN").build());
-        Role userRole = roleRepository.save(Role.builder().name("ROLE_USER").build());
+        // Create Roles with hierarchy
+        Role superAdminRole = createRoleIfNotExists("ROLE_SUPERADMIN", 5, "System administrator with full access");
+        Role adminRole = createRoleIfNotExists("ROLE_ADMIN", 4, "Administrator with user management");
+        Role managerRole = createRoleIfNotExists("ROLE_MANAGER", 3, "Fleet manager with approval rights");
+        Role inspectorRole = createRoleIfNotExists("ROLE_INSPECTOR", 2, "Inspector conducting vehicle checks");
+        Role userRole = createRoleIfNotExists("ROLE_USER", 1, "Default read-only user");
 
-        Set<Role> adminRoles = new HashSet<>();
-        adminRoles.add(adminRole);
+        log.info("Created/verified 5 roles with hierarchy levels");
 
-        Set<Role> userRoles = new HashSet<>();
-        userRoles.add(userRole);
+        // Create demo users for each role
+        createUserIfNotExists("superadmin", "superadmin", Set.of(superAdminRole));
+        createUserIfNotExists("admin", "admin", Set.of(adminRole));
+        createUserIfNotExists("manager", "manager", Set.of(managerRole));
+        createUserIfNotExists("inspector", "inspector", Set.of(inspectorRole));
+        createUserIfNotExists("user", "user", Set.of(userRole));
 
-        // Create Users
-        userRepository.save(User.builder()
-                .username("admin")
-                .password(passwordEncoder.encode("admin"))
-                .roles(adminRoles)
-                .build());
-
-        userRepository.save(User.builder()
-                .username("user")
-                .password(passwordEncoder.encode("user"))
-                .roles(userRoles)
-                .build());
-
-        log.info("Created 2 users (admin/user)");
+        log.info("Created 5 demo users (superadmin/admin/manager/inspector/user)");
 
         // Create Sample Vehicles
         createSampleVehicles();
 
         log.info("Data loading completed successfully!");
+    }
+
+    private Role createRoleIfNotExists(String name, Integer level, String description) {
+        return roleRepository.findByName(name)
+                .orElseGet(() -> {
+                    Role role = Role.builder()
+                            .name(name)
+                            .level(level)
+                            .description(description)
+                            .build();
+                    return roleRepository.save(role);
+                });
+    }
+
+    private void createUserIfNotExists(String username, String password, Set<Role> roles) {
+        if (userRepository.findByUsername(username).isEmpty()) {
+            User user = User.builder()
+                    .username(username)
+                    .password(passwordEncoder.encode(password))
+                    .roles(roles)
+                    .build();
+            userRepository.save(user);
+            log.info("Created user: {}", username);
+        } else {
+            log.info("User already exists: {}", username);
+        }
     }
 
     private void createSampleVehicles() {

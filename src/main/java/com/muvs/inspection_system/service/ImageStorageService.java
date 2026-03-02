@@ -1,8 +1,8 @@
 package com.muvs.inspection_system.service;
 
 import com.muvs.inspection_system.config.AwsS3Config;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -12,16 +12,19 @@ import software.amazon.awssdk.services.s3.model.*;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
+@ConditionalOnBean(S3Client.class)
 public class ImageStorageService {
-    
-    private final Optional<S3Client> s3Client;
+    private final S3Client s3Client;
     private final AwsS3Config awsS3Config;
+
+    public ImageStorageService(S3Client s3Client, AwsS3Config awsS3Config) {
+        this.s3Client = s3Client;
+        this.awsS3Config = awsS3Config;
+    }
     
     /**
      * Upload file to S3 and return the public URL
@@ -44,7 +47,7 @@ public class ImageStorageService {
                     .contentLength(file.getSize())
                     .build();
             
-            getRequiredS3Client().putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
+            s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
             
             String fileUrl = getFileUrl(key);
             log.info("File uploaded successfully: {}", fileUrl);
@@ -70,7 +73,7 @@ public class ImageStorageService {
                     .key(key)
                     .build();
             
-            getRequiredS3Client().deleteObject(deleteObjectRequest);
+            s3Client.deleteObject(deleteObjectRequest);
             log.info("File deleted successfully from S3: {}", key);
         } catch (S3Exception e) {
             log.error("Failed to delete file from S3: {}", e.getMessage(), e);
@@ -120,8 +123,4 @@ public class ImageStorageService {
         throw new IllegalArgumentException("Invalid S3 URL format: " + url);
     }
 
-    private S3Client getRequiredS3Client() {
-        return s3Client.orElseThrow(() ->
-                new IllegalStateException("S3 is not configured. Set AWS_ACCESS_KEY and AWS_SECRET_KEY to enable image upload."));
-    }
 }
