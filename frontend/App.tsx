@@ -1,209 +1,76 @@
-import React, { useState, useEffect } from 'react';
-import {
-  LayoutDashboard, Car, ClipboardList, FileText,
-  Settings, Users, Bell, Search, LogOut, User
-} from 'lucide-react';
+import React, { useEffect, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
+import AuditTrail from "./components/AuditTrail";
+import ChecklistHistory from "./components/ChecklistHistory";
+import ChecklistManager from "./components/Checklist/ChecklistManager";
+import Dashboard from "./components/Dashboard";
+import DefectManagement from "./components/DefectManagement";
+import Login from "./components/Login";
+import Reports from "./components/Reports";
+import UserManagement from "./components/UserManagement";
+import VehicleManagement from "./components/VehicleManagement";
+import { auth } from "./config";
+import AppShell from "./layout/AppShell";
 
-import Dashboard from './components/Dashboard';
-import VehicleManagement from './components/VehicleManagement';
-import ChecklistManager from './components/Checklist/ChecklistManager';
-import AuditTrail from './components/AuditTrail';
-import UserManagement from './components/UserManagement';
-import Login from './components/Login';
-import { ViewState } from './types';
-import { auth } from './config';
-import Reports from './components/Reports';
-
-const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<ViewState>('dashboard');
-  const [isAuthenticated, setIsAuthenticated] = useState(auth.isAuthenticated());
-  const [username, setUsername] = useState(auth.getUsername() || 'User');
-  const [isAdmin, setIsAdmin] = useState(auth.hasRole('ROLE_ADMIN'));
-
-  // Check authentication on mount and listen for expiration
-  useEffect(() => {
-    setIsAuthenticated(auth.isAuthenticated());
-    setUsername(auth.getUsername() || 'User');
-
-    // Listen for authentication expiration events from API interceptor
-    const handleAuthExpired = () => {
-      setIsAuthenticated(false);
-      setUsername('User');
-      setIsAdmin(false);
-      setCurrentView('dashboard');
-    };
-
-    window.addEventListener('auth:expired', handleAuthExpired);
-
-    return () => {
-      window.removeEventListener('auth:expired', handleAuthExpired);
-    };
-  }, []);
-
-  // Handle login success
-  const handleLoginSuccess = () => {
-    setIsAuthenticated(true);
-    setUsername(auth.getUsername() || 'User');
-    setIsAdmin(auth.hasRole('ROLE_ADMIN'));
-  };
-
-  // Handle logout
-  const handleLogout = async () => {
-    await auth.logout(); // Call backend to revoke refresh token
-    setIsAuthenticated(false);
-    setUsername('User');
-    setCurrentView('dashboard');
-  };
-
-  // Show login page if not authenticated
+const ProtectedRoute: React.FC<{ isAuthenticated: boolean; children: React.ReactNode }> = ({
+  isAuthenticated,
+  children,
+}) => {
   if (!isAuthenticated) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    return <Navigate to="/" replace />;
   }
 
-  const renderContent = () => {
-    switch (currentView) {
-      case 'dashboard': return <Dashboard />;
-      case 'vehicles': return <VehicleManagement />;
-      case 'checklist': return <ChecklistManager />;
-      case 'audit': return <AuditTrail />;
-      case 'reports': return <Reports />;
-      case 'users': return <UserManagement />;
-      default: return <Dashboard />;
-    }
+  return <>{children}</>;
+};
+
+const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(auth.isAuthenticated());
+
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setIsAuthenticated(false);
+    };
+
+    window.addEventListener("auth:expired", handleAuthExpired);
+    return () => window.removeEventListener("auth:expired", handleAuthExpired);
+  }, []);
+
+  const handleLoginSuccess = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = async () => {
+    await auth.logout();
+    setIsAuthenticated(false);
   };
 
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-900 font-sans overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm z-20 hidden md:flex">
-        <div className="p-6 border-b border-gray-100">
-          <h1 className="text-xl font-bold text-gray-900 flex items-center">
-            <Car className="mr-2 text-blue-600" />
-            FleetGuard
-          </h1>
-        </div>
-        
-        <nav className="flex-1 p-4 space-y-1">
-          <p className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Main Menu</p>
-          <NavItem 
-            icon={<LayoutDashboard size={20} />} 
-            label="Dashboard" 
-            active={currentView === 'dashboard'} 
-            onClick={() => setCurrentView('dashboard')} 
-          />
-          <NavItem 
-            icon={<Car size={20} />} 
-            label="Vehicle Management" 
-            active={currentView === 'vehicles'} 
-            onClick={() => setCurrentView('vehicles')} 
-          />
-          <NavItem 
-            icon={<ClipboardList size={20} />} 
-            label="Checklist Management" 
-            active={currentView === 'checklist'} 
-            onClick={() => setCurrentView('checklist')} 
-          />
-          
-          <div className="my-4 border-t border-gray-100"></div>
-          
-          <p className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Administration</p>
-          <NavItem 
-            icon={<FileText size={20} />} 
-            label="Audit Trail" 
-            active={currentView === 'audit'} 
-            onClick={() => setCurrentView('audit')} 
-          />
-          <NavItem
-            icon={<Settings size={20} />}
-            label="Reports & Print"
-            active={currentView === 'reports'}
-            onClick={() => setCurrentView('reports')}
-          />
-          {isAdmin && (
-            <NavItem
-              icon={<Users size={20} />}
-              label="User Management"
-              active={currentView === 'users'}
-              onClick={() => setCurrentView('users')}
-            />
-          )}
-        </nav>
+    <Routes>
+      <Route
+        path="/"
+        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login onLoginSuccess={handleLoginSuccess} />}
+      />
 
-        <div className="p-4 border-t border-gray-100">
-          <div className="flex items-center gap-3 px-4 py-2">
-             <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
-               {username.substring(0, 2).toUpperCase()}
-             </div>
-             <div className="flex-1 min-w-0">
-               <p className="text-sm font-medium text-gray-900 truncate">{username}</p>
-               <p className="text-xs text-gray-500 truncate">{auth.getRoles().join(', ')}</p>
-             </div>
-             <button
-               onClick={handleLogout}
-               className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-               title="Logout"
-             >
-               <LogOut size={18} />
-             </button>
-          </div>
-        </div>
-      </aside>
+      <Route
+        element={
+          <ProtectedRoute isAuthenticated={isAuthenticated}>
+            <AppShell onLogout={handleLogout} />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/vehicles" element={<VehicleManagement />} />
+        <Route path="/checklist" element={<ChecklistManager />} />
+        <Route path="/history" element={<ChecklistHistory />} />
+        <Route path="/defects" element={<DefectManagement />} />
+        <Route path="/audit" element={<AuditTrail />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/users" element={auth.hasRole("ROLE_ADMIN") ? <UserManagement /> : <Navigate to="/dashboard" replace />} />
+      </Route>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {/* Top Header */}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm z-10">
-           <div className="flex items-center text-gray-500 md:hidden">
-              <Car className="mr-2 text-blue-600" />
-              <span className="font-bold text-gray-900">FleetGuard</span>
-           </div>
-
-           {/* Breadcrumb / Title Context (Optional, simplified here) */}
-           <div className="hidden md:block text-gray-500 text-sm">
-              Rental Fleet Manager / <span className="text-gray-900 font-medium capitalize">{currentView.replace('-', ' ')}</span>
-           </div>
-
-           <div className="flex items-center gap-4">
-              <div className="relative hidden md:block">
-                 <Search className="absolute left-2.5 top-2.5 text-gray-400" size={16} />
-                 <input type="text" placeholder="Search..." className="pl-9 pr-4 py-2 bg-gray-100 border-none rounded-lg text-sm focus:ring-2 focus:ring-blue-500 w-64 transition-all" />
-              </div>
-              <button className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
-                 <Bell size={20} />
-                 <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-              </button>
-              <div className="h-8 w-[1px] bg-gray-200 mx-1"></div>
-              <div className="flex items-center gap-2 text-gray-700 font-medium text-sm">
-                 <span className="hidden md:inline">{username}</span>
-                 <div className="bg-gray-100 p-1 rounded-full w-8 h-8 flex items-center justify-center">
-                   <User size={20} />
-                 </div>
-              </div>
-           </div>
-        </header>
-
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-auto p-4 md:p-8 relative">
-           {renderContent()}
-        </div>
-      </main>
-    </div>
+      <Route path="*" element={<Navigate to={isAuthenticated ? "/dashboard" : "/"} replace />} />
+    </Routes>
   );
 };
-
-// Helper for Nav Items
-const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
-  <button 
-    onClick={onClick}
-    className={`w-full flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 mb-1
-      ${active 
-        ? 'bg-blue-50 text-blue-700 shadow-sm' 
-        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}
-    `}
-  >
-    <span className={`mr-3 ${active ? 'text-blue-600' : 'text-gray-400'}`}>{icon}</span>
-    {label}
-  </button>
-);
 
 export default App;

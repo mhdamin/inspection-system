@@ -70,7 +70,7 @@ describe('Auth Utilities', () => {
 
     it('should handle invalid JSON in roles', () => {
       localStorage.setItem('roles', 'invalid-json');
-      expect(() => auth.getRoles()).toThrow();
+      expect(auth.getRoles()).toEqual([]);
     });
   });
 

@@ -2,8 +2,9 @@
 // This file centralizes all configuration values from environment variables
 
 export const config = {
-  // API base URL - defaults to localhost:8080 if not set
-  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:8080',
+  // API base URL - use empty string for relative URLs when running behind Nginx proxy
+  // Falls back to localhost:8080 for local development
+  apiUrl: import.meta.env.VITE_API_URL || '',
 };
 
 // Authentication utility functions
@@ -44,7 +45,15 @@ export const auth = {
   // Get user roles
   getRoles: (): string[] => {
     const roles = localStorage.getItem('roles');
-    return roles ? JSON.parse(roles) : [];
+    if (!roles) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(roles) as string[];
+    } catch {
+      return [];
+    }
   },
 
   // Check if user is authenticated
@@ -77,17 +86,16 @@ export const auth = {
       if (!response.ok) {
         console.error('Token refresh failed:', response.status);
         // Refresh token is invalid or expired, logout user
-        auth.logout();
+        await auth.logout();
         return false;
       }
 
       const data = await response.json();
       auth.setToken(data.accessToken);
-      console.log('Access token refreshed successfully');
       return true;
     } catch (error) {
       console.error('Error refreshing token:', error);
-      auth.logout();
+      await auth.logout();
       return false;
     }
   },
@@ -119,6 +127,12 @@ export const auth = {
 
     // Clear local storage regardless of backend response
     auth.removeToken();
+  },
+
+  // Handle token expiration and redirect to login
+  handleTokenExpiration: (): void => {
+    auth.removeToken();
+    window.dispatchEvent(new CustomEvent('auth:expired'));
   },
 };
 

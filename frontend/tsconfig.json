@@ -24,6 +24,10 @@
       ]
     },
     "allowImportingTsExtensions": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
     "noEmit": true
   }
 }

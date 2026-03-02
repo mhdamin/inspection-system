@@ -1,36 +1,38 @@
-// API utility with automatic JWT refresh and error handling
-import { auth, config } from './config';
+import { auth, config } from "./config";
 
-// Flag to track if we're currently refreshing the token
+type QueueItem = {
+  resolve: () => void;
+  reject: (reason?: unknown) => void;
+};
+
 let isRefreshing = false;
-// Queue of requests waiting for token refresh
-let failedQueue: Array<{
-  resolve: (value?: any) => void;
-  reject: (reason?: any) => void;
-}> = [];
+let failedQueue: QueueItem[] = [];
 
-const processQueue = (error: any = null) => {
-  failedQueue.forEach(prom => {
+const processQueue = (error?: unknown) => {
+  failedQueue.forEach((item) => {
     if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve();
+      item.reject(error);
+      return;
     }
+    item.resolve();
   });
-
   failedQueue = [];
 };
 
-// Enhanced fetch with automatic token refresh
+const redirectToLogin = () => {
+  auth.removeToken();
+  window.dispatchEvent(new CustomEvent("auth:expired"));
+};
+
 export const apiFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
-  // Add Authorization header if token exists
-  const headers = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  };
+  const headers = new Headers(options.headers);
+  const isFormData = options.body instanceof FormData;
+  if (!headers.has("Content-Type") && !isFormData) {
+    headers.set("Content-Type", "application/json");
+  }
 
   if (auth.isAuthenticated()) {
-    headers['Authorization'] = auth.getAuthHeader();
+    headers.set("Authorization", auth.getAuthHeader());
   }
 
   const requestOptions: RequestInit = {
@@ -38,119 +40,84 @@ export const apiFetch = async (url: string, options: RequestInit = {}): Promise<
     headers,
   };
 
-  try {
-    let response = await fetch(url, requestOptions);
+  let response = await fetch(url, requestOptions);
 
-    // If 401 Unauthorized, try to refresh token
-    if (response.status === 401) {
-      if (isRefreshing) {
-        // Wait for the current refresh to complete
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        }).then(() => {
-          // Retry original request with new token
-          requestOptions.headers['Authorization'] = auth.getAuthHeader();
-          return fetch(url, requestOptions);
-        });
-      }
-
-      isRefreshing = true;
-
-      try {
-        const refreshed = await auth.refreshAccessToken();
-
-        if (refreshed) {
-          // Token refreshed successfully, retry original request
-          processQueue();
-          requestOptions.headers['Authorization'] = auth.getAuthHeader();
-          response = await fetch(url, requestOptions);
-        } else {
-          // Refresh failed, redirect to login
-          processQueue(new Error('Token refresh failed'));
-          redirectToLogin();
-          throw new Error('Authentication expired. Please login again.');
-        }
-      } catch (error) {
-        processQueue(error);
-        redirectToLogin();
-        throw error;
-      } finally {
-        isRefreshing = false;
-      }
+  if (response.status === 401) {
+    if (isRefreshing) {
+      await new Promise<void>((resolve, reject) => {
+        failedQueue.push({ resolve, reject });
+      });
+      headers.set("Authorization", auth.getAuthHeader());
+      return fetch(url, { ...requestOptions, headers });
     }
 
-    // If still 401 after refresh attempt, or 403 Forbidden, handle appropriately
-    if (response.status === 401 || response.status === 403) {
-      if (response.status === 401) {
+    isRefreshing = true;
+    try {
+      const refreshed = await auth.refreshAccessToken();
+      if (!refreshed) {
+        processQueue(new Error("Token refresh failed"));
         redirectToLogin();
+        throw new Error("Authentication expired. Please login again.");
       }
-      // Don't throw for 403, let the caller handle it
+      processQueue();
+      headers.set("Authorization", auth.getAuthHeader());
+      response = await fetch(url, { ...requestOptions, headers });
+    } catch (error) {
+      processQueue(error);
+      redirectToLogin();
+      throw error;
+    } finally {
+      isRefreshing = false;
     }
-
-    return response;
-  } catch (error) {
-    console.error('API Fetch Error:', error);
-    throw error;
   }
+
+  if (response.status === 401) {
+    redirectToLogin();
+  }
+
+  return response;
 };
 
-// Redirect to login and clear authentication
-const redirectToLogin = () => {
-  auth.removeToken();
-  // Dispatch custom event that App.tsx can listen to
-  window.dispatchEvent(new CustomEvent('auth:expired'));
+const toError = async (response: Response) => {
+  const errorText = await response.text();
+  throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
 };
 
-// API helper methods
 export const api = {
-  get: async (endpoint: string): Promise<any> => {
-    const response = await apiFetch(`${config.apiUrl}${endpoint}`, {
-      method: 'GET',
-    });
-
+  get: async <T>(endpoint: string): Promise<T> => {
+    const response = await apiFetch(`${config.apiUrl}${endpoint}`, { method: "GET" });
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      return toError(response);
     }
-
-    return response.json();
+    return response.json() as Promise<T>;
   },
 
-  post: async (endpoint: string, data: any): Promise<any> => {
+  post: async <T>(endpoint: string, data: unknown): Promise<T> => {
     const response = await apiFetch(`${config.apiUrl}${endpoint}`, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(data),
     });
-
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      return toError(response);
     }
-
-    return response.json();
+    return response.json() as Promise<T>;
   },
 
-  put: async (endpoint: string, data: any): Promise<any> => {
+  put: async <T>(endpoint: string, data: unknown): Promise<T> => {
     const response = await apiFetch(`${config.apiUrl}${endpoint}`, {
-      method: 'PUT',
+      method: "PUT",
       body: JSON.stringify(data),
     });
-
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      return toError(response);
     }
-
-    return response.json();
+    return response.json() as Promise<T>;
   },
 
   delete: async (endpoint: string): Promise<void> => {
-    const response = await apiFetch(`${config.apiUrl}${endpoint}`, {
-      method: 'DELETE',
-    });
-
+    const response = await apiFetch(`${config.apiUrl}${endpoint}`, { method: "DELETE" });
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      return toError(response);
     }
   },
 };

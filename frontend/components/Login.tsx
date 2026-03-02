@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, User, AlertCircle } from 'lucide-react';
-import config from '../config';
+import { config, auth } from '../config';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -35,9 +35,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       const data = await response.json();
 
-      // Store tokens and user info in localStorage
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('refreshToken', data.refreshToken);
+      // Store tokens and user info
+      auth.setToken(data.token);
+      auth.setRefreshToken(data.refreshToken);
       localStorage.setItem('username', data.username);
       localStorage.setItem('roles', JSON.stringify(data.roles));
 
@@ -127,20 +127,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </button>
           </form>
 
-          {/* Demo Credentials */}
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <p className="text-xs text-gray-500 text-center mb-2">Demo Credentials:</p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-gray-50 p-2 rounded">
-                <p className="font-medium text-gray-700">Admin:</p>
-                <p className="text-gray-600">admin / admin</p>
-              </div>
-              <div className="bg-gray-50 p-2 rounded">
-                <p className="font-medium text-gray-700">User:</p>
-                <p className="text-gray-600">user / user</p>
-              </div>
-            </div>
-          </div>
+          <p className="mt-6 border-t border-gray-200 pt-4 text-center text-xs text-gray-500">
+            Use your assigned enterprise account credentials.
+          </p>
         </div>
 
         {/* Footer */}
