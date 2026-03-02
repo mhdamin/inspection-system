@@ -2,9 +2,9 @@
 // This file centralizes all configuration values from environment variables
 
 export const config = {
-  // API base URL - use empty string for relative URLs when running behind Nginx proxy
+  // API base URL
   // Falls back to localhost:8080 for local development
-  apiUrl: import.meta.env.VITE_API_URL || '',
+  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:8080',
 };
 
 // Authentication utility functions

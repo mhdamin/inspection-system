@@ -1,6 +1,6 @@
-import { expect, afterEach, vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 // Cleanup after each test
 afterEach(() => {
@@ -44,6 +44,3 @@ global.localStorage = localStorageMock as unknown as Storage;
 
 // Mock fetch for API calls
 global.fetch = vi.fn();
-
-// Extend expect with testing-library matchers
-expect.extend({});
