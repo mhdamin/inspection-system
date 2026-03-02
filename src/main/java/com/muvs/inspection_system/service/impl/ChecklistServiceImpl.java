@@ -188,6 +188,8 @@ public class ChecklistServiceImpl implements ChecklistService {
                 .id(vehicle.getId())
                 .plateNumber(vehicle.getPlateNumber())
                 .model(vehicle.getModel())
+                .manufacturer(vehicle.getManufacturer())
+                .year(vehicle.getYear())
                 .build();
     }
 }

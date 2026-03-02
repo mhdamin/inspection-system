@@ -8,8 +8,8 @@ import com.muvs.inspection_system.repository.DefectImageRepository;
 import com.muvs.inspection_system.repository.DefectRepository;
 import com.muvs.inspection_system.service.DefectImageService;
 import com.muvs.inspection_system.service.ImageStorageService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -20,17 +20,27 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class DefectImageServiceImpl implements DefectImageService {
-    
+
     private final DefectImageRepository defectImageRepository;
     private final DefectRepository defectRepository;
     private final ImageStorageService imageStorageService;
+
+    public DefectImageServiceImpl(
+            DefectImageRepository defectImageRepository,
+            DefectRepository defectRepository,
+            @Autowired(required = false) ImageStorageService imageStorageService) {
+        this.defectImageRepository = defectImageRepository;
+        this.defectRepository = defectRepository;
+        this.imageStorageService = imageStorageService;
+    }
     
     @Override
     @Transactional
     public DefectImageResponseDTO uploadImage(Long defectId, MultipartFile file, Long uploadedBy) {
         log.info("Uploading image for defect ID: {}", defectId);
+
+        ensureStorageConfigured();
         
         // Validate defect exists
         Defect defect = defectRepository.findById(defectId)
@@ -92,6 +102,8 @@ public class DefectImageServiceImpl implements DefectImageService {
     @Transactional
     public void deleteImage(Long imageId) {
         log.info("Deleting image with ID: {}", imageId);
+
+        ensureStorageConfigured();
         
         DefectImage image = defectImageRepository.findById(imageId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -120,5 +132,11 @@ public class DefectImageServiceImpl implements DefectImageService {
                 .uploadedBy(image.getUploadedBy())
                 .uploadedAt(image.getUploadedAt())
                 .build();
+    }
+
+    private void ensureStorageConfigured() {
+        if (imageStorageService == null) {
+            throw new IllegalStateException("Image storage is not configured. Enable aws.s3.enabled=true to upload/delete images.");
+        }
     }
 }

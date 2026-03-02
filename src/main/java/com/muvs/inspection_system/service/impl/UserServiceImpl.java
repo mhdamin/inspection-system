@@ -3,6 +3,7 @@ package com.muvs.inspection_system.service.impl;
 import com.muvs.inspection_system.dto.RegisterRequestDTO;
 import com.muvs.inspection_system.dto.UserRequestDTO;
 import com.muvs.inspection_system.dto.UserResponseDTO;
+import com.muvs.inspection_system.dto.UserUpdateRequestDTO;
 import com.muvs.inspection_system.entity.Role;
 import com.muvs.inspection_system.entity.User;
 import com.muvs.inspection_system.exception.ResourceNotFoundException;
@@ -127,6 +128,35 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    public UserResponseDTO updateUserProfile(Long id, UserUpdateRequestDTO requestDTO) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + id));
+
+        // Update username if changed and not duplicate
+        if (requestDTO.getUsername() != null && !user.getUsername().equals(requestDTO.getUsername())) {
+            if (userRepository.findByUsername(requestDTO.getUsername()).isPresent()) {
+                throw new IllegalArgumentException("Username already exists: " + requestDTO.getUsername());
+            }
+            user.setUsername(requestDTO.getUsername());
+        }
+
+        // Update roles if provided (admin only)
+        if (requestDTO.getRoles() != null && !requestDTO.getRoles().isEmpty()) {
+            Set<Role> roles = new HashSet<>();
+            for (String roleName : requestDTO.getRoles()) {
+                Role role = roleRepository.findByName(roleName)
+                        .orElseThrow(() -> new ResourceNotFoundException("Role not found: " + roleName));
+                roles.add(role);
+            }
+            user.setRoles(roles);
+        }
+
+        user = userRepository.save(user);
+        return toDto(user);
+    }
+
+    @Override
+    @Transactional
     public UserResponseDTO changePassword(Long id, String oldPassword, String newPassword) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + id));
@@ -140,6 +170,17 @@ public class UserServiceImpl implements UserService {
         user.setPassword(passwordEncoder.encode(newPassword));
         user = userRepository.save(user);
         return toDto(user);
+    }
+
+    @Override
+    @Transactional
+    public void adminResetPassword(Long userId, String newPassword) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
+
+        // Admin can reset password without knowing old password
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
     }
 
     private UserResponseDTO toDto(User user) {

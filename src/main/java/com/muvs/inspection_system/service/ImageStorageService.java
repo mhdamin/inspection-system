@@ -1,8 +1,8 @@
 package com.muvs.inspection_system.service;
 
 import com.muvs.inspection_system.config.AwsS3Config;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -16,11 +16,16 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
+@ConditionalOnBean(S3Client.class)
 public class ImageStorageService {
-    
+
     private final S3Client s3Client;
     private final AwsS3Config awsS3Config;
+
+    public ImageStorageService(S3Client s3Client, AwsS3Config awsS3Config) {
+        this.s3Client = s3Client;
+        this.awsS3Config = awsS3Config;
+    }
     
     /**
      * Upload file to S3 and return the public URL

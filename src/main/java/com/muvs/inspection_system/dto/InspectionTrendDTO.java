@@ -5,17 +5,12 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.UUID;
-
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class VehicleSummaryDTO {
-    
-    private UUID id;
-    private String plateNumber;
-    private String model;
-    private String manufacturer;
-    private Integer year;
+public class InspectionTrendDTO {
+    private String date;           // Format: "YYYY-MM-DD" or "Mon", "Tue", etc.
+    private Long inspectionCount;
+    private Long defectCount;
 }
