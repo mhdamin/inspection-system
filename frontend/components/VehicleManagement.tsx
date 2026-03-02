@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, Plus, Car, CheckCircle, Key, PenTool, Eye, Edit2, Trash2, X } from 'lucide-react';
+import { Search, Plus, Car, CheckCircle, Key, PenTool, Eye, Edit2, Trash2, X } from 'lucide-react';
 import { Vehicle } from '../types';
-import config, { auth } from '../config';
+import { auth } from '../config';
 import api from '../api';
 
 // Mock data removed - using actual backend data
@@ -22,15 +22,7 @@ const VehicleManagement: React.FC = () => {
   useEffect(() => {
     const fetchVehicles = async () => {
       try {
-        const response = await fetch(`${config.apiUrl}/api/vehicles`, {
-          headers: {
-            'Authorization': auth.getAuthHeader()
-          }
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
+        const data = await api.get<Vehicle[]>('/api/vehicles');
         setVehicles(data);
       } catch (error) {
         setError("Failed to fetch vehicles.");
@@ -245,7 +237,7 @@ const VehicleManagement: React.FC = () => {
             // Refresh vehicle list
             const fetchVehicles = async () => {
               try {
-                const data = await api.get('/api/vehicles');
+                const data = await api.get<Vehicle[]>('/api/vehicles');
                 setVehicles(data);
               } catch (error) {
                 console.error('Error fetching vehicles:', error);
@@ -281,7 +273,7 @@ const VehicleManagement: React.FC = () => {
             // Refresh vehicle list
             const fetchVehicles = async () => {
               try {
-                const data = await api.get('/api/vehicles');
+                const data = await api.get<Vehicle[]>('/api/vehicles');
                 setVehicles(data);
               } catch (error) {
                 console.error('Error fetching vehicles:', error);
@@ -306,7 +298,7 @@ const VehicleManagement: React.FC = () => {
             // Refresh vehicle list
             const fetchVehicles = async () => {
               try {
-                const data = await api.get('/api/vehicles');
+                const data = await api.get<Vehicle[]>('/api/vehicles');
                 setVehicles(data);
               } catch (error) {
                 console.error('Error fetching vehicles:', error);

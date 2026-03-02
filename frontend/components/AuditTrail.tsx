@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Filter, Download, Printer, RefreshCw, Calendar, User, FileText, AlertCircle, CheckCircle, Clock } from 'lucide-react';
-import config, { auth } from '../config';
+import { Download, Printer, RefreshCw, Calendar, User, FileText, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import api from '../api';
 
 interface VehicleChangeLog {
   id: string;
@@ -42,18 +42,7 @@ const AuditTrail: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${config.apiUrl}/api/activities/all`, {
-        headers: {
-          'Authorization': auth.getAuthHeader()
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('Audit trail data:', data);
+      const data = await api.get<VehicleChangeLog[]>('/api/activities/all');
       setLogs(data);
       setFilteredLogs(data);
     } catch (error) {

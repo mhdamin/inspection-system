@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
-  CheckCircle, ArrowRight, ArrowLeft, Car, AlertOctagon, PenTool, X, Camera, Loader
+  CheckCircle, ArrowRight, ArrowLeft, Car, AlertOctagon, PenTool, X, Loader
 } from 'lucide-react';
-import { config, auth } from '../../config';
+import { auth } from '../../config';
+import api from '../../api';
 
 // --- TYPES ---
 interface Vehicle {
@@ -83,6 +84,7 @@ const ChecklistManager: React.FC = () => {
   const [loadingVehicles, setLoadingVehicles] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   const steps = [
     { id: 1, name: 'Vehicle Info' },
@@ -99,16 +101,8 @@ const ChecklistManager: React.FC = () => {
 
   const fetchVehicles = async () => {
     try {
-      const response = await fetch(`${config.apiUrl}/api/vehicles`, {
-        headers: {
-          'Authorization': auth.getAuthHeader(),
-        },
-      });
-
-      if (response.ok) {
-        const vehicleData = await response.json();
-        setVehicles(vehicleData.filter((v: Vehicle) => v.status === 'Available'));
-      }
+      const vehicleData = await api.get<Vehicle[]>('/api/vehicles');
+      setVehicles(vehicleData.filter((v: Vehicle) => v.status === 'Available'));
     } catch (err) {
       console.error('Failed to fetch vehicles:', err);
       setError('Failed to load vehicles');
@@ -166,6 +160,7 @@ const ChecklistManager: React.FC = () => {
   const completeChecklist = async () => {
     setSubmitting(true);
     setError('');
+    setSuccessMessage('');
 
     try {
       // 1. Create main checklist
@@ -180,20 +175,8 @@ const ChecklistManager: React.FC = () => {
         vehicleId: data.vehicleId
       };
 
-      const checklistResponse = await fetch(`${config.apiUrl}/api/checklists`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': auth.getAuthHeader(),
-        },
-        body: JSON.stringify(checklistPayload),
-      });
-
-      if (!checklistResponse.ok) {
-        throw new Error('Failed to create checklist');
-      }
-
-      const checklistId = await checklistResponse.text(); // UUID returned as text
+      const checklistIdRaw = await api.post<string>('/api/checklists', checklistPayload);
+      const checklistId = String(checklistIdRaw).replace(/"/g, '');
 
       // 2. Create sub-checklists for each section
       // Exterior sub-checklist
@@ -201,38 +184,20 @@ const ChecklistManager: React.FC = () => {
         type: 'EXTERIOR',
         staffName: data.staffName,
         remarks: `Exterior inspection completed. ${data.exteriorPoints.filter(p => p.status === 'Abnormal').length} issues found.`,
-        checklistId: checklistId.replace(/"/g, '') // Remove quotes from UUID
+        checklistId
       };
 
-      const exteriorResponse = await fetch(`${config.apiUrl}/api/sub-checklists`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': auth.getAuthHeader(),
-        },
-        body: JSON.stringify(exteriorSubChecklist),
-      });
-
-      if (!exteriorResponse.ok) {
-        throw new Error('Failed to create exterior sub-checklist');
-      }
+      await api.post('/api/sub-checklists', exteriorSubChecklist);
 
       // Interior sub-checklist
       const interiorSubChecklist = {
         type: 'INTERIOR',
         staffName: data.staffName,
         remarks: `Interior inspection completed. ${data.interiorSections.filter(s => s.status === 'Abnormal').length} issues found.`,
-        checklistId: checklistId.replace(/"/g, '')
+        checklistId
       };
 
-      await fetch(`${config.apiUrl}/api/sub-checklists`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': auth.getAuthHeader(),
-        },
-        body: JSON.stringify(interiorSubChecklist),
-      });
+      await api.post('/api/sub-checklists', interiorSubChecklist);
 
       // 3. Create defects for abnormal inspection points
       const abnormalPoints = data.exteriorPoints.filter(p => p.status === 'Abnormal');
@@ -245,18 +210,11 @@ const ChecklistManager: React.FC = () => {
           diagramY: Math.round(point.y)
         };
 
-        await fetch(`${config.apiUrl}/api/checklists/${checklistId.replace(/"/g, '')}/defects`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': auth.getAuthHeader(),
-          },
-          body: JSON.stringify(defectPayload),
-        });
+        await api.post(`/api/checklists/${checklistId}/defects`, defectPayload);
       }
 
       // Success!
-      alert(`✅ Inspection Completed!\n\nChecklist Number: ${data.checklistNumber}\n\nThe inspection has been saved to the database.`);
+      setSuccessMessage(`Inspection ${data.checklistNumber} completed successfully.`);
 
       // Reset form
       setData({
@@ -321,6 +279,12 @@ const ChecklistManager: React.FC = () => {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center">
           <AlertOctagon size={20} className="mr-2" />
           <span>{error}</span>
+        </div>
+      )}
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center">
+          <CheckCircle size={20} className="mr-2" />
+          <span>{successMessage}</span>
         </div>
       )}
 
@@ -612,7 +576,6 @@ const StepInterior = ({ sections, onUpdate }: any) => {
 };
 
 const StepSummary = ({ data }: any) => {
-  const selectedVehicle = data.vehicleId;
   const abnormalExterior = data.exteriorPoints.filter((p: InspectionPoint) => p.status === 'Abnormal').length;
   const abnormalInterior = data.interiorSections.filter((s: any) => s.status === 'Abnormal').length;
 
