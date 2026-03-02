@@ -1,6 +1,7 @@
 package com.muvs.inspection_system.config;
 
 import lombok.Data;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,13 +16,14 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
 @Configuration
 @ConfigurationProperties(prefix = "aws.s3")
 public class AwsS3Config {
-    
+
     private String accessKey;
     private String secretKey;
     private String region;
     private String bucketName;
-    
+
     @Bean
+    @ConditionalOnProperty(name = "aws.s3.enabled", havingValue = "true", matchIfMissing = false)
     public S3Client s3Client() {
         String resolvedRegion = StringUtils.hasText(region) ? region : "ap-southeast-1";
         S3ClientBuilder builder = S3Client.builder()
