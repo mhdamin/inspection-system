@@ -21,6 +21,12 @@ import java.util.UUID;
 @Entity
 @Table(name = "checklists")
 public class Checklist {
+    private UUID rentalId;
+    private LocalDateTime completedAt;
+    @Column(columnDefinition = "text")
+    private String evidenceJson;
+    @Version
+    private Long version;
     
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

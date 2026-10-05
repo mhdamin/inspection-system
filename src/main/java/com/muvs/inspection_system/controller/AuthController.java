@@ -8,6 +8,9 @@ import com.muvs.inspection_system.exception.ResourceNotFoundException;
 import com.muvs.inspection_system.repository.UserRepository;
 import com.muvs.inspection_system.service.RefreshTokenService;
 import com.muvs.inspection_system.service.UserService;
+import com.muvs.inspection_system.service.RoleService;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.access.AccessDeniedException;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +37,7 @@ public class AuthController {
     private final UserService userService;
     private final UserRepository userRepository;
     private final RefreshTokenService refreshTokenService;
+    private final RoleService roleService;
 
     @PostMapping("/login")
     public ResponseEntity<LoginResponseDTO> login(@Valid @RequestBody LoginRequestDTO loginRequest) {
@@ -79,7 +83,16 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<UserResponseDTO> register(@Valid @RequestBody RegisterRequestDTO registerRequest) {
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERADMIN')")
+    public ResponseEntity<UserResponseDTO> register(@Valid @RequestBody RegisterRequestDTO registerRequest, Authentication authentication) {
+        UserResponseDTO currentUser = userService.getUserByUsername(authentication.getName());
+        Set<String> requestedRoles = registerRequest.getRoles();
+        if (requestedRoles == null || requestedRoles.isEmpty()) requestedRoles = Set.of("ROLE_USER");
+        for (String role : requestedRoles) {
+            if (!roleService.getAssignableRoles(currentUser).contains(role)) {
+                throw new AccessDeniedException("You cannot assign the requested role");
+            }
+        }
         log.info("Registration attempt for user: {}", registerRequest.getUsername());
         UserResponseDTO user = userService.createUser(registerRequest);
         log.info("Registration successful for user: {}", registerRequest.getUsername());

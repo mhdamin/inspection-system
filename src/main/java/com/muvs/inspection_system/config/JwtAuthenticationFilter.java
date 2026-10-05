@@ -35,18 +35,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         final String username;
 
         // Check if Authorization header exists and starts with "Bearer "
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ") || request.getServletPath().equals("/api/auth/login") || request.getServletPath().equals("/api/auth/refresh")) {
             filterChain.doFilter(request, response);
             return;
         }
 
         // Extract JWT token from header
         jwt = authHeader.substring(7);
-        username = jwtUtil.extractUsername(jwt);
+        try {
+            username = jwtUtil.extractUsername(jwt);
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException ex) {
+            response.sendError(401, "Session expired. Please sign in again.");
+            return;
+        }
 
         // If username is present and user is not already authenticated
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+            UserDetails userDetails;
+            try { userDetails = this.userDetailsService.loadUserByUsername(username); }
+            catch (org.springframework.security.core.userdetails.UsernameNotFoundException ex) {
+                response.sendError(401, "Session expired. Please sign in again.");
+                return;
+            }
 
             // Validate token
             if (jwtUtil.validateToken(jwt, userDetails)) {

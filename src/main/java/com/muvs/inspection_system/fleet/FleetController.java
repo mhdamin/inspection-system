@@ -17,6 +17,9 @@ public class FleetController {
 
     private final FleetService fleetService;
 
+    @PostMapping("/bookings/quote")
+    public Map<String, Object> previewBooking(@Valid @RequestBody FleetDtos.BookingRequest request) { return fleetService.previewBooking(request); }
+
     @GetMapping("/vehicle-options")
     public List<FleetDtos.VehicleOptionDto> listVehicleOptions() { return fleetService.listVehicleOptions(); }
 

@@ -145,6 +145,8 @@ public final class FleetDtos {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class PaymentCreateRequest {
+        @NotBlank private String reference;
+        @NotBlank private String requestKey;
         @NotBlank
         private String invoiceId;
         @NotBlank
@@ -161,6 +163,8 @@ public final class FleetDtos {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class RefundRequest {
+        @NotBlank private String reference;
+        @NotBlank private String requestKey;
         private String invoiceId;
         private String settlementId;
         @NotBlank

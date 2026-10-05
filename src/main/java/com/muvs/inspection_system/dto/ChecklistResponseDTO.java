@@ -14,6 +14,10 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ChecklistResponseDTO {
+    private UUID rentalId;
+    private boolean completed;
+    private LocalDateTime completedAt;
+    private InspectionEvidenceDTO evidence;
     
     private UUID id;
     private String checklistNumber;

@@ -24,7 +24,7 @@ public class VehicleController {
     private final VehicleService vehicleService;
 
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERADMIN')")
     public ResponseEntity<UUID> createVehicle(@Valid @RequestBody VehicleRequestDTO dto) {
         log.info("POST /api/vehicles - Creating vehicle with plate: {}", dto.getPlateNumber());
         UUID vehicleId = vehicleService.createVehicle(dto);
@@ -46,7 +46,7 @@ public class VehicleController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERADMIN')")
     public ResponseEntity<VehicleResponseDTO> updateVehicle(
             @PathVariable UUID id,
             @Valid @RequestBody VehicleRequestDTO dto) {
@@ -56,7 +56,7 @@ public class VehicleController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERADMIN')")
     public ResponseEntity<Void> deleteVehicle(@PathVariable UUID id) {
         log.info("DELETE /api/vehicles/{} - Deleting vehicle", id);
         vehicleService.deleteVehicle(id);

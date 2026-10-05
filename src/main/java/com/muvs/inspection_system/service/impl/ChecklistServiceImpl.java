@@ -28,6 +28,8 @@ public class ChecklistServiceImpl implements ChecklistService {
     
     private final ChecklistRepository checklistRepository;
     private final VehicleRepository vehicleRepository;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final com.muvs.inspection_system.fleet.FleetService fleetService;
     
     @Override
     @Transactional
@@ -41,6 +43,13 @@ public class ChecklistServiceImpl implements ChecklistService {
         
         // Check for duplicate checklist number
         if (checklistRepository.existsByChecklistNumber(dto.getChecklistNumber())) {
+            Checklist previous = checklistRepository.findByChecklistNumber(dto.getChecklistNumber()).orElseThrow();
+            if (previous.getStaffName().equals(dto.getStaffName()) && previous.getVehicle().getId().equals(dto.getVehicleId())
+                    && (previous.getCompletedAt() != null) == dto.isCompleted()
+                    && java.util.Objects.equals(previous.getRentalId(), dto.getRentalId())
+                    && previous.getRentalType().equals(dto.getRentalType())
+                    && previous.getCustomerName().equals(dto.getCustomerName())
+                    && java.util.Objects.equals(readEvidence(previous.getEvidenceJson()), dto.getEvidence())) return previous.getId();
             throw new IllegalArgumentException(
                     "Checklist with number " + dto.getChecklistNumber() + " already exists");
         }
@@ -56,6 +65,7 @@ public class ChecklistServiceImpl implements ChecklistService {
                 .vehicle(vehicle)
                 .build();
         
+        applyEvidence(checklist, dto);
         Checklist savedChecklist = checklistRepository.save(checklist);
         log.info("Checklist created successfully with ID: {}", savedChecklist.getId());
         
@@ -99,6 +109,7 @@ public class ChecklistServiceImpl implements ChecklistService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Vehicle not found with ID: " + dto.getVehicleId()));
         
+        if (checklist.getCompletedAt() != null) throw new IllegalStateException("Completed inspections cannot be edited. Create a new inspection.");
         // Check if checklist number is being changed and if it already exists
         if (!checklist.getChecklistNumber().equals(dto.getChecklistNumber())
                 && checklistRepository.existsByChecklistNumber(dto.getChecklistNumber())) {
@@ -115,6 +126,7 @@ public class ChecklistServiceImpl implements ChecklistService {
         checklist.setRentalType(dto.getRentalType());
         checklist.setVehicle(vehicle);
         
+        applyEvidence(checklist, dto);
         Checklist updatedChecklist = checklistRepository.save(checklist);
         log.info("Checklist updated successfully with ID: {}", updatedChecklist.getId());
         
@@ -130,6 +142,8 @@ public class ChecklistServiceImpl implements ChecklistService {
             throw new ResourceNotFoundException("Checklist not found with ID: " + id);
         }
         
+        Checklist checklist = checklistRepository.findById(id).orElseThrow();
+        if (checklist.getCompletedAt() != null) throw new IllegalStateException("Completed inspections are retained as evidence and cannot be deleted.");
         checklistRepository.deleteById(id);
         log.info("Checklist deleted successfully with ID: {}", id);
     }
@@ -170,6 +184,10 @@ public class ChecklistServiceImpl implements ChecklistService {
     
     private ChecklistResponseDTO toDto(Checklist checklist) {
         return ChecklistResponseDTO.builder()
+                .rentalId(checklist.getRentalId())
+                .completed(checklist.getCompletedAt() != null)
+                .completedAt(checklist.getCompletedAt())
+                .evidence(readEvidence(checklist.getEvidenceJson()))
                 .id(checklist.getId())
                 .checklistNumber(checklist.getChecklistNumber())
                 .rentalStartDate(checklist.getRentalStartDate())
@@ -183,6 +201,49 @@ public class ChecklistServiceImpl implements ChecklistService {
                 .build();
     }
     
+    private void applyEvidence(Checklist checklist, ChecklistRequestDTO dto) {
+        if (dto.getRentalId() != null) {
+            var rental = fleetService.getRental(dto.getRentalId());
+            if (!dto.getVehicleId().toString().equals(String.valueOf(rental.get("vehicleId"))))
+                throw new IllegalArgumentException("Inspection vehicle must match the rental vehicle");
+            if (!dto.getCustomerName().trim().equalsIgnoreCase(String.valueOf(rental.get("customerName")).trim()))
+                throw new IllegalArgumentException("Inspection customer must match the rental customer");
+        }
+        var evidence = dto.getEvidence();
+        if (dto.isCompleted()) {
+            if (evidence == null || !evidence.isAcknowledged() || evidence.getAcknowledgedBy() == null
+                    || !dto.getCustomerName().trim().equalsIgnoreCase(evidence.getAcknowledgedBy().trim()))
+                throw new IllegalArgumentException("Customer acknowledgement is required to complete an inspection");
+            if (evidence.getExterior().size() != 20 || evidence.getExterior().stream().map(p -> p.getId()).distinct().count() != 20
+                    || evidence.getExterior().stream().anyMatch(p -> "Not Inspected".equals(p.getStatus())))
+                throw new IllegalArgumentException("Inspect all exterior points before completing");
+            if (!evidence.getInterior().keySet().equals(java.util.Set.of("dashboard", "seats", "carpets", "windows", "electronics", "safety"))
+                    || evidence.getInterior().values().stream().anyMatch(v -> v == null || v.isBlank()))
+                throw new IllegalArgumentException("Complete all interior observations");
+            if (!evidence.getTyres().keySet().equals(java.util.Set.of("frontLeft", "frontRight", "rearLeft", "rearRight"))
+                    || evidence.getTyres().values().stream().anyMatch(v -> !java.util.Set.of("Normal", "Abnormal", "N/A").contains(v)))
+                throw new IllegalArgumentException("Inspect all four tyres");
+            if (evidence.getExterior().stream().anyMatch(p -> "Abnormal".equals(p.getStatus()) && (p.getNotes() == null || p.getNotes().isBlank())))
+                throw new IllegalArgumentException("Describe each abnormal exterior condition");
+            checklist.setCompletedAt(java.time.LocalDateTime.now());
+        }
+        checklist.setRentalId(dto.getRentalId());
+        try {
+            checklist.setEvidenceJson(evidence == null ? null : objectMapper.writeValueAsString(evidence));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalArgumentException("Unable to save inspection evidence", ex);
+        }
+    }
+
+    private com.muvs.inspection_system.dto.InspectionEvidenceDTO readEvidence(String json) {
+        if (json == null) return null;
+        try {
+            return objectMapper.readValue(json, com.muvs.inspection_system.dto.InspectionEvidenceDTO.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("Inspection evidence could not be read", ex);
+        }
+    }
+
     private VehicleSummaryDTO toVehicleSummary(Vehicle vehicle) {
         return VehicleSummaryDTO.builder()
                 .id(vehicle.getId())

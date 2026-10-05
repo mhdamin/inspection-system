@@ -21,6 +21,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
+import org.springframework.http.HttpMethod;
 
 @Configuration
 @EnableWebSecurity
@@ -50,9 +51,18 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource())) // Enable CORS
                 .csrf(csrf -> csrf.disable()) // Disable CSRF for REST API with JWT
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/auth/**").permitAll() // Allow auth endpoints without authentication
-                        .requestMatchers("/h2-console/**").permitAll() // Allow H2 console
-                        .requestMatchers("/api/**").authenticated() // All other API endpoints require authentication
+                        .requestMatchers("/api/auth/login", "/api/auth/refresh").permitAll()
+                        .requestMatchers("/api/auth/register").hasAnyRole("ADMIN", "SUPERADMIN")
+                        .requestMatchers("/api/auth/**").authenticated()
+                        .requestMatchers("/api/portal/**").hasRole("CUSTOMER")
+                        .requestMatchers("/api/users/profile", "/api/users/change-password").authenticated()
+                        .requestMatchers("/h2-console/**").denyAll()
+                        .requestMatchers(HttpMethod.POST, "/api/rate-plans", "/api/payments", "/api/refunds").hasAnyRole("MANAGER", "ADMIN", "SUPERADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/rate-plans/**").hasAnyRole("MANAGER", "ADMIN", "SUPERADMIN")
+                        .requestMatchers(HttpMethod.PATCH, "/api/approvals/**").hasAnyRole("MANAGER", "ADMIN", "SUPERADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/**").hasAnyRole("MANAGER", "ADMIN", "SUPERADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/**").hasAnyRole("USER", "INSPECTOR", "MANAGER", "ADMIN", "SUPERADMIN")
+                        .requestMatchers("/api/**").hasAnyRole("INSPECTOR", "MANAGER", "ADMIN", "SUPERADMIN")
                         .anyRequest().permitAll()
                 )
                 .sessionManagement(session -> session
@@ -61,8 +71,9 @@ public class SecurityConfig {
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class); // Add JWT filter
 
-        // Allow H2 console frames
-        http.headers(headers -> headers.frameOptions(frameOptions -> frameOptions.disable()));
+        http.exceptionHandling(errors -> errors
+                .authenticationEntryPoint((request, response, error) -> response.sendError(401))
+                .accessDeniedHandler((request, response, error) -> response.sendError(403)));
 
         return http.build();
     }

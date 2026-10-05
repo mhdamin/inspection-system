@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Set;
 
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "app.seed-demo-data", havingValue = "true")
 @Slf4j
 public class DataLoader implements CommandLineRunner {
 

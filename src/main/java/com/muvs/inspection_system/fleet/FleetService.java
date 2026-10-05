@@ -41,6 +41,8 @@ public class FleetService {
     private final FleetApprovalRepository approvalRepository;
     private final FleetNotificationRepository notificationRepository;
     private final VehicleRepository vehicleRepository;
+    private final jakarta.persistence.EntityManager entityManager;
+    private final com.muvs.inspection_system.repository.ChecklistRepository checklistRepository;
 
     public void seedIfEmpty() {
         if (customerRepository.count() > 0) {
@@ -348,8 +350,9 @@ public class FleetService {
 
     public Map<String, Object> createBooking(FleetDtos.BookingRequest request) {
         FleetCustomer customer = customerRepository.findById(UUID.fromString(request.getCustomerId())).orElseThrow(() -> new ResourceNotFoundException("Customer not found"));
+        validateCustomer(customer, request.getDropoffDateTime(), false);
         FleetRatePlan ratePlan = findRatePlan(request.getVehicleClass());
-        Pricing pricing = calculatePricingBreakdown(ratePlan, request.getVehicleClass(), request.getPickupDateTime(), request.getDropoffDateTime(), 0, request.getEstimatedTotal() > 0 ? request.getEstimatedTotal() : null);
+        Pricing pricing = calculatePricingBreakdown(ratePlan, request.getVehicleClass(), request.getPickupDateTime(), request.getDropoffDateTime(), 0, null);
         FleetBooking booking = bookingRepository.save(FleetBooking.builder()
                 .bookingNumber(generateNumber("BK"))
                 .customerId(customer.getId().toString())
@@ -367,7 +370,7 @@ public class FleetService {
                 .addOnTotal(pricing.addOnTotal)
                 .discountTotal(pricing.discountTotal)
                 .taxTotal(pricing.taxTotal)
-                .depositStatus(DepositStatusValue.HELD)
+                .depositStatus(DepositStatusValue.NOT_COLLECTED)
                 .status(BookingStatusValue.DRAFT)
                 .notes(request.getNotes())
                 .build());
@@ -375,9 +378,10 @@ public class FleetService {
     }
 
     public Map<String, Object> updateBooking(UUID id, FleetDtos.BookingRequest request) {
-        FleetBooking booking = bookingRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+        FleetBooking booking = lock(FleetBooking.class, id);
+        require(booking.getStatus() == BookingStatusValue.DRAFT || booking.getStatus() == BookingStatusValue.CONFIRMED, "Only unassigned bookings can be edited");
         FleetRatePlan ratePlan = findRatePlan(request.getVehicleClass());
-        Pricing pricing = calculatePricingBreakdown(ratePlan, request.getVehicleClass(), request.getPickupDateTime(), request.getDropoffDateTime(), booking.getAddOnTotal(), request.getEstimatedTotal() > 0 ? request.getEstimatedTotal() : null);
+        Pricing pricing = calculatePricingBreakdown(ratePlan, request.getVehicleClass(), request.getPickupDateTime(), request.getDropoffDateTime(), booking.getAddOnTotal(), null);
         booking.setPickupLocation(request.getPickupLocation());
         booking.setDropoffLocation(request.getDropoffLocation());
         booking.setPickupDateTime(request.getPickupDateTime());
@@ -396,27 +400,34 @@ public class FleetService {
     }
 
     public Map<String, Object> confirmBooking(UUID id) {
-        FleetBooking booking = bookingRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+        FleetBooking booking = lock(FleetBooking.class, id);
+        require(booking.getStatus() == BookingStatusValue.DRAFT || booking.getStatus() == BookingStatusValue.CONFIRMED || booking.getStatus() == BookingStatusValue.ASSIGNED, "This booking can no longer be confirmed");
         booking.setStatus(booking.getAssignedVehicleId() == null ? BookingStatusValue.CONFIRMED : BookingStatusValue.ASSIGNED);
         return toBooking(booking);
     }
 
     public Map<String, Object> cancelBooking(UUID id) {
-        FleetBooking booking = bookingRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+        FleetBooking booking = lock(FleetBooking.class, id);
+        if (booking.getStatus() == BookingStatusValue.CANCELLED) return toBooking(booking);
+        require(rentalRepository.findFirstByBookingId(id.toString()).isEmpty(), "A rental already exists. Resolve its handover and finances before cancellation.");
+        require(booking.getStatus() != BookingStatusValue.CHECKED_OUT && booking.getStatus() != BookingStatusValue.COMPLETED, "This booking cannot be cancelled");
         booking.setStatus(BookingStatusValue.CANCELLED);
-        if (booking.getAssignedVehicleId() != null) {
-            updateVehicleStatus(UUID.fromString(booking.getAssignedVehicleId()), VehicleOperationalStatusValue.AVAILABLE);
-        }
+        if (booking.getAssignedVehicleId() != null) refreshVehicleAvailability(UUID.fromString(booking.getAssignedVehicleId()));
         return toBooking(booking);
     }
 
     public Map<String, Object> assignVehicleToBooking(UUID id, String vehicleId) {
-        FleetBooking booking = bookingRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
-        Vehicle vehicle = vehicleRepository.findById(UUID.fromString(vehicleId)).orElseThrow(() -> new ResourceNotFoundException("Vehicle not found"));
-        booking.setAssignedVehicleId(vehicle.getId().toString());
+        FleetBooking booking = lock(FleetBooking.class, id);
+        require(booking.getStatus() == BookingStatusValue.CONFIRMED || booking.getStatus() == BookingStatusValue.ASSIGNED, "Confirm the booking before assigning a vehicle");
+        require(rentalRepository.findFirstByBookingId(id.toString()).isEmpty(), "Vehicle assignment is locked after rental creation");
+        Vehicle vehicle = lock(Vehicle.class, UUID.fromString(vehicleId));
+        validateAvailability(vehicle, booking.getPickupDateTime(), booking.getDropoffDateTime(), id.toString(), null, booking.getVehicleClass());
+        String previous = booking.getAssignedVehicleId();
+        booking.setAssignedVehicleId(vehicleId);
         booking.setAssignedVehiclePlate(vehicle.getPlateNumber());
         booking.setStatus(BookingStatusValue.ASSIGNED);
-        updateVehicleStatus(vehicle.getId(), VehicleOperationalStatusValue.RESERVED);
+        refreshVehicleAvailability(vehicle.getId());
+        if (previous != null && !previous.equals(vehicleId)) refreshVehicleAvailability(UUID.fromString(previous));
         return toBooking(booking);
     }
 
@@ -441,11 +452,21 @@ public class FleetService {
     }
 
     public Map<String, Object> createRentalFromBooking(FleetDtos.RentalCreateRequest request) {
-        FleetBooking booking = bookingRepository.findById(UUID.fromString(request.getBookingId())).orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
-        Vehicle vehicle = vehicleRepository.findById(UUID.fromString(request.getVehicleId())).orElseThrow(() -> new ResourceNotFoundException("Vehicle not found"));
-        FleetRatePlan ratePlan = findRatePlan(booking.getVehicleClass());
+        FleetBooking booking = lock(FleetBooking.class, UUID.fromString(request.getBookingId()));
+        Optional<FleetRental> existing = rentalRepository.findFirstByBookingId(request.getBookingId());
+        if (existing.isPresent()) {
+            require(existing.get().getVehicleId().equals(request.getVehicleId()), "Booking already converted with another vehicle");
+            return toRental(existing.get());
+        }
+        require(booking.getStatus() == BookingStatusValue.CONFIRMED || booking.getStatus() == BookingStatusValue.ASSIGNED, "Only confirmed bookings can become rentals");
+        Vehicle vehicle = lock(Vehicle.class, UUID.fromString(request.getVehicleId()));
+        validateAvailability(vehicle, booking.getPickupDateTime(), booking.getDropoffDateTime(), request.getBookingId(), null, booking.getVehicleClass());
+        validateCustomer(customerRepository.findById(UUID.fromString(booking.getCustomerId())).orElseThrow(), booking.getDropoffDateTime(), false);
+        fuelValue(request.getFuelOut());
         double addOnTotal = Optional.ofNullable(request.getAddOns()).orElse(List.of()).size() * 15.0;
-        Pricing pricing = calculatePricingBreakdown(ratePlan, booking.getVehicleClass(), booking.getPickupDateTime(), booking.getDropoffDateTime(), addOnTotal, null);
+        double taxRate = booking.getTaxTotal() / Math.max(0.01, booking.getBaseRate() * booking.getRentalDays());
+        double subtotal = booking.getBaseRate() * booking.getRentalDays() + addOnTotal;
+        Pricing pricing = new Pricing(booking.getRatePlanId(), booking.getBaseRate(), booking.getRentalDays(), addOnTotal, 0, round(subtotal * taxRate), round(subtotal + round(subtotal * taxRate)));
         FleetRental rental = rentalRepository.save(FleetRental.builder()
                 .rentalNumber(generateNumber("RNT"))
                 .bookingId(booking.getId().toString())
@@ -459,9 +480,9 @@ public class FleetService {
                 .expectedReturnDateTime(booking.getDropoffDateTime())
                 .odometerOut(request.getOdometerOut())
                 .fuelOut(request.getFuelOut())
-                .depositAmount(request.getDepositAmount() > 0 ? request.getDepositAmount() : booking.getDepositAmount())
+                .depositAmount(booking.getDepositAmount())
                 .depositStatus(booking.getDepositStatus())
-                .ratePlanId(ratePlan != null ? ratePlan.getId().toString() : null)
+                .ratePlanId(booking.getRatePlanId())
                 .baseRate(pricing.baseRate)
                 .rentalDays(pricing.rentalDays)
                 .addOnTotal(pricing.addOnTotal)
@@ -473,10 +494,12 @@ public class FleetService {
                 .notes(request.getNotes())
                 .build());
 
+        String previousVehicleId = booking.getAssignedVehicleId();
         booking.setAssignedVehicleId(vehicle.getId().toString());
         booking.setAssignedVehiclePlate(vehicle.getPlateNumber());
         booking.setStatus(BookingStatusValue.ASSIGNED);
-        updateVehicleStatus(vehicle.getId(), VehicleOperationalStatusValue.RESERVED);
+        refreshVehicleAvailability(vehicle.getId());
+        if (previousVehicleId != null && !previousVehicleId.equals(vehicle.getId().toString())) refreshVehicleAvailability(UUID.fromString(previousVehicleId));
 
         invoiceRepository.save(buildInvoice(booking.getId().toString(), rental.getId().toString(), null, rental.getCustomerName(), List.of(
                 lineItem(rental.getVehicleClass() + " rental", pricing.baseRate * pricing.rentalDays, InvoiceItemCategoryValue.RENTAL),
@@ -484,48 +507,63 @@ public class FleetService {
                 lineItem("Tax", pricing.taxTotal, InvoiceItemCategoryValue.TAX)
         ), InvoiceStatusValue.DRAFT));
 
+        if (rental.getDepositAmount() > 0) invoiceRepository.save(buildInvoice(booking.getId().toString(), rental.getId().toString(), null, rental.getCustomerName(), List.of(
+                lineItem("Refundable security deposit", rental.getDepositAmount(), InvoiceItemCategoryValue.DEPOSIT)), InvoiceStatusValue.ISSUED));
         return toRental(rental);
     }
 
     public Map<String, Object> startRental(UUID id) {
-        FleetRental rental = rentalRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Rental not found"));
+        FleetRental rental = lock(FleetRental.class, id);
+        if (rental.getStatus() == RentalStatusValue.ACTIVE) return toRental(rental);
+        require(rental.getStatus() == RentalStatusValue.RESERVED, "Only a reserved rental can be started");
+        Vehicle vehicle = lock(Vehicle.class, UUID.fromString(rental.getVehicleId()));
+        validateAvailability(vehicle, rental.getPickupDateTime(), rental.getExpectedReturnDateTime(), rental.getBookingId(), id.toString(), rental.getVehicleClass());
+        require(rentalRepository.findByVehicleId(rental.getVehicleId()).stream().noneMatch(r -> !r.getId().equals(id) && (r.getStatus() == RentalStatusValue.ACTIVE || r.getStatus() == RentalStatusValue.OVERDUE)), "Vehicle is still out on another rental");
+        validateCustomer(customerRepository.findById(UUID.fromString(rental.getCustomerId())).orElseThrow(), rental.getExpectedReturnDateTime(), true);
+        require(rental.getDepositAmount() == 0 || rental.getDepositStatus() == DepositStatusValue.HELD, "Record the security deposit before handover");
+        require(checklistRepository.findAll().stream().anyMatch(c -> id.equals(c.getRentalId()) && c.getCompletedAt() != null && "PICKUP".equalsIgnoreCase(c.getRentalType())), "Complete the pickup inspection before handover");
         rental.setStatus(RentalStatusValue.ACTIVE);
-        FleetBooking booking = bookingRepository.findById(UUID.fromString(rental.getBookingId())).orElse(null);
-        if (booking != null) {
-            booking.setStatus(BookingStatusValue.CHECKED_OUT);
-        }
-        updateVehicleStatus(UUID.fromString(rental.getVehicleId()), VehicleOperationalStatusValue.RENTED);
-        invoiceRepository.findFirstByRentalIdAndStatus(rental.getId().toString(), InvoiceStatusValue.DRAFT).ifPresent(invoice -> invoice.setStatus(InvoiceStatusValue.ISSUED));
+        bookingRepository.findById(UUID.fromString(rental.getBookingId())).ifPresent(b -> b.setStatus(BookingStatusValue.CHECKED_OUT));
+        vehicle.setStatus("Rented");
+        rentalInvoice(rental).ifPresent(invoice -> invoice.setStatus(invoice.getBalanceDue() == 0 ? InvoiceStatusValue.PAID : InvoiceStatusValue.ISSUED));
         return toRental(rental);
     }
 
     public Map<String, Object> extendRental(UUID id, FleetDtos.RentalExtendRequest request) {
-        FleetRental rental = rentalRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Rental not found"));
-        FleetRatePlan ratePlan = rental.getRatePlanId() == null ? null : ratePlanRepository.findById(UUID.fromString(rental.getRatePlanId())).orElse(null);
-        Pricing pricing = calculatePricingBreakdown(ratePlan, rental.getVehicleClass(), rental.getPickupDateTime(), request.getExpectedReturnDateTime(), rental.getAddOnTotal(), null);
+        FleetRental rental = lock(FleetRental.class, id);
+        require(rental.getStatus() != RentalStatusValue.CLOSED, "Closed rentals cannot be extended");
+        require(parseDateTime(request.getExpectedReturnDateTime()).isAfter(parseDateTime(rental.getExpectedReturnDateTime())), "The new return time must be later than the current return time");
+        Vehicle vehicle = lock(Vehicle.class, UUID.fromString(rental.getVehicleId()));
+        validateAvailability(vehicle, rental.getPickupDateTime(), request.getExpectedReturnDateTime(), rental.getBookingId(), id.toString(), rental.getVehicleClass());
+        validateCustomer(customerRepository.findById(UUID.fromString(rental.getCustomerId())).orElseThrow(), request.getExpectedReturnDateTime(), false);
+        double taxRate = rental.getTaxTotal() / Math.max(0.01, rental.getBaseRate() * rental.getRentalDays() + rental.getAddOnTotal());
+        int days = rentalDays(rental.getPickupDateTime(), request.getExpectedReturnDateTime());
+        double subtotal = round(rental.getBaseRate() * days + rental.getAddOnTotal());
         rental.setExpectedReturnDateTime(request.getExpectedReturnDateTime());
-        rental.setBaseRate(pricing.baseRate);
-        rental.setRentalDays(pricing.rentalDays);
-        rental.setTaxTotal(pricing.taxTotal);
-        rental.setEstimatedTotal(pricing.estimatedTotal);
+        rental.setRentalDays(days);
+        rental.setTaxTotal(round(subtotal * taxRate));
+        rental.setEstimatedTotal(round(subtotal + rental.getTaxTotal()));
         rental.setNotes(request.getNotes());
+        rentalInvoice(rental).ifPresent(invoice -> {
+            entityManager.lock(invoice, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            invoice.getLineItems().clear();
+            invoice.getLineItems().addAll(List.of(lineItem("Rental", rental.getBaseRate() * days, InvoiceItemCategoryValue.RENTAL), lineItem("Add-ons", rental.getAddOnTotal(), InvoiceItemCategoryValue.ADD_ON), lineItem("Tax", rental.getTaxTotal(), InvoiceItemCategoryValue.TAX)));
+            invoice.setSubtotal(subtotal); invoice.setTaxTotal(rental.getTaxTotal()); invoice.setTotal(rental.getEstimatedTotal());
+            applyPayment(invoice, 0);
+        });
+        bookingRepository.findById(UUID.fromString(rental.getBookingId())).ifPresent(b -> b.setDropoffDateTime(request.getExpectedReturnDateTime()));
         return toRental(rental);
     }
 
     public Map<String, Object> closeRental(UUID id) {
-        FleetRental rental = rentalRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Rental not found"));
-        rental.setStatus(RentalStatusValue.CLOSED);
-        rental.setActualReturnDateTime(now().toString());
-        FleetBooking booking = bookingRepository.findById(UUID.fromString(rental.getBookingId())).orElse(null);
-        if (booking != null) {
-            booking.setStatus(BookingStatusValue.COMPLETED);
-        }
-        updateVehicleStatus(UUID.fromString(rental.getVehicleId()), VehicleOperationalStatusValue.AVAILABLE);
+        FleetRental rental = lock(FleetRental.class, id);
+        require(rental.getStatus() == RentalStatusValue.CLOSED, "Submit a return assessment to close a rental");
         return toRental(rental);
     }
 
     public FleetDtos.QuoteResponse quoteReturnCharges(FleetDtos.ReturnQuoteRequest request) {
-        ReturnCharge charge = calculateReturnOutcome(request.getFuelIn(), request.isDamageFlag(), request.isMaintenanceFlag(), request.getLateHours(), request.getExtraCharges());
+        FleetRental rental = rentalRepository.findById(UUID.fromString(request.getRentalId())).orElseThrow(() -> new ResourceNotFoundException("Rental not found"));
+        ReturnCharge charge = calculateReturnOutcome(rental.getFuelOut(), request.getFuelIn(), request.isDamageFlag(), request.isMaintenanceFlag(), request.getLateHours(), request.getExtraCharges());
         return new FleetDtos.QuoteResponse(charge.baseCharges, charge.totalCharges, toLabel(charge.outcome));
     }
 
@@ -535,8 +573,16 @@ public class FleetService {
     }
 
     public Map<String, Object> submitReturn(FleetDtos.ReturnSubmitRequest request) {
-        FleetRental rental = rentalRepository.findById(UUID.fromString(request.getRentalId())).orElseThrow(() -> new ResourceNotFoundException("Rental not found"));
-        ReturnCharge charge = calculateReturnOutcome(request.getFuelIn(), request.isDamageFlag(), request.isMaintenanceFlag(), request.getLateHours(), request.getExtraCharges());
+        FleetRental rental = lock(FleetRental.class, UUID.fromString(request.getRentalId()));
+        Optional<FleetReturn> previousReturn = returnRepository.findFirstByRentalId(request.getRentalId());
+        if (previousReturn.isPresent()) return toReturn(previousReturn.get());
+        require(rental.getStatus() == RentalStatusValue.ACTIVE || rental.getStatus() == RentalStatusValue.OVERDUE, "Only an active rental can be returned");
+        require(request.getOdometerIn() >= rental.getOdometerOut(), "Return odometer cannot be lower than pickup odometer");
+        require(request.getChecklistId() != null && !request.getChecklistId().isBlank(), "Select a completed return inspection");
+        var inspection = checklistRepository.findById(UUID.fromString(request.getChecklistId())).orElseThrow(() -> new IllegalArgumentException("Return inspection not found"));
+        require(rental.getId().equals(inspection.getRentalId()) && inspection.getCompletedAt() != null && "RETURN".equalsIgnoreCase(inspection.getRentalType()), "Select a completed return inspection for this rental");
+        lock(Vehicle.class, UUID.fromString(rental.getVehicleId()));
+        ReturnCharge charge = calculateReturnOutcome(rental.getFuelOut(), request.getFuelIn(), request.isDamageFlag(), request.isMaintenanceFlag(), request.getLateHours(), request.getExtraCharges());
         FleetReturn fleetReturn = returnRepository.save(FleetReturn.builder()
                 .returnNumber(generateNumber("RET"))
                 .rentalId(rental.getId().toString())
@@ -558,7 +604,7 @@ public class FleetService {
                 .notes(request.getNotes())
                 .build());
 
-        double depositHeld = rental.getDepositAmount();
+        double depositHeld = rental.getDepositStatus() == DepositStatusValue.HELD ? rental.getDepositAmount() : 0;
         double depositApplied = round(Math.min(depositHeld, fleetReturn.getTotalCharges()));
         double amountDue = round(Math.max(0, fleetReturn.getTotalCharges() - depositHeld));
         double amountRefundable = round(Math.max(0, depositHeld - fleetReturn.getTotalCharges()));
@@ -566,10 +612,9 @@ public class FleetService {
         FleetInvoice settlementInvoice = buildInvoice(null, rental.getId().toString(), null, rental.getCustomerName(), List.of(
                 lineItem("Return charges", fleetReturn.getTotalCharges(), InvoiceItemCategoryValue.PENALTY)
         ), amountDue > 0 ? InvoiceStatusValue.ISSUED : InvoiceStatusValue.PAID);
-        if (amountDue == 0) {
-            settlementInvoice.setAmountPaid(settlementInvoice.getTotal());
-            settlementInvoice.setBalanceDue(0);
-        }
+        settlementInvoice.setAmountPaid(depositApplied);
+        settlementInvoice.setBalanceDue(amountDue);
+        if (amountDue > 0 && depositApplied > 0) settlementInvoice.setStatus(InvoiceStatusValue.PARTIALLY_PAID);
         invoiceRepository.save(settlementInvoice);
 
         FleetRefund autoRefund = null;
@@ -580,7 +625,7 @@ public class FleetService {
                     .customerName(rental.getCustomerName())
                     .amount(amountRefundable)
                     .reason("Unused deposit refund")
-                    .status(RefundStatusValue.PROCESSED)
+                    .status(RefundStatusValue.PENDING)
                     .createdAtValue(now().toString())
                     .build());
         }
@@ -593,13 +638,13 @@ public class FleetService {
                 .vehiclePlate(rental.getVehiclePlate())
                 .depositHeld(depositHeld)
                 .depositApplied(depositApplied)
-                .depositRefunded(amountRefundable)
+                .depositRefunded(0)
                 .returnCharges(fleetReturn.getTotalCharges())
                 .invoiceId(settlementInvoice.getId().toString())
                 .refundId(autoRefund != null ? autoRefund.getId().toString() : null)
                 .amountDue(amountDue)
                 .amountRefundable(amountRefundable)
-                .status(amountRefundable > 0 ? SettlementStatusValue.REFUNDED : amountDue > 0 ? SettlementStatusValue.OPEN : SettlementStatusValue.SETTLED)
+                .status(amountRefundable > 0 || amountDue > 0 ? SettlementStatusValue.OPEN : SettlementStatusValue.SETTLED)
                 .createdAtValue(now().toString())
                 .build());
 
@@ -613,7 +658,7 @@ public class FleetService {
         rental.setFuelIn(request.getFuelIn());
         rental.setActualReturnDateTime(fleetReturn.getSubmittedAt());
         rental.setStatus(RentalStatusValue.CLOSED);
-        rental.setDepositStatus(amountRefundable > 0 ? DepositStatusValue.REFUNDED : amountDue > 0 || depositApplied == depositHeld ? DepositStatusValue.APPLIED : DepositStatusValue.PARTIALLY_REFUNDED);
+        rental.setDepositStatus(amountRefundable > 0 ? DepositStatusValue.HELD : depositHeld > 0 ? DepositStatusValue.APPLIED : DepositStatusValue.NOT_COLLECTED);
 
         bookingRepository.findById(UUID.fromString(rental.getBookingId())).ifPresent(booking -> {
             booking.setStatus(BookingStatusValue.COMPLETED);
@@ -627,7 +672,7 @@ public class FleetService {
             updateVehicleStatus(UUID.fromString(rental.getVehicleId()), VehicleOperationalStatusValue.MAINTENANCE);
             createWorkOrderIfMissing(fleetReturn);
         } else {
-            updateVehicleStatus(UUID.fromString(rental.getVehicleId()), VehicleOperationalStatusValue.AVAILABLE);
+            refreshVehicleAvailability(UUID.fromString(rental.getVehicleId()));
         }
         if (amountDue > 0) {
             createSettlementExceptionIfMissing(settlement);
@@ -651,20 +696,31 @@ public class FleetService {
     }
 
     public Map<String, Object> createPayment(FleetDtos.PaymentCreateRequest request) {
-        FleetInvoice invoice = invoiceRepository.findById(UUID.fromString(request.getInvoiceId())).orElseThrow(() -> new ResourceNotFoundException("Invoice not found"));
+        FleetInvoice invoice = lock(FleetInvoice.class, UUID.fromString(request.getInvoiceId()));
+        Optional<FleetPayment> existing = paymentRepository.findByRequestKey(request.getRequestKey());
+        if (existing.isPresent()) {
+            require(existing.get().getInvoiceId().equals(request.getInvoiceId()) && existing.get().getAmount() == round(request.getAmount()), "Payment request key was already used for another payment");
+            return toPayment(existing.get());
+        }
+        double amount = round(request.getAmount());
+        require(amount > 0 && amount <= invoice.getBalanceDue(), "Payment must be positive and cannot exceed the outstanding balance");
+        boolean deposit = invoice.getLineItems().stream().anyMatch(item -> item.getCategory() == InvoiceItemCategoryValue.DEPOSIT);
         FleetPayment payment = paymentRepository.save(FleetPayment.builder()
-                .paymentNumber(generateNumber("PAY"))
-                .invoiceId(invoice.getId().toString())
-                .customerName(request.getCustomerName())
-                .amount(round(request.getAmount()))
-                .method(parseEnum(PaymentMethodValue.class, request.getMethod()))
-                .status(PaymentStatusValue.CAPTURED)
-                .paymentType(parseEnum(PaymentTypeValue.class, request.getPaymentType()))
-                .createdAtValue(now().toString())
-                .build());
-        applyPayment(invoice, payment.getAmount());
-        settlementRepository.findAll().stream().filter(item -> item.getInvoiceId().equals(invoice.getId().toString()) && invoice.getBalanceDue() <= 0).findFirst().ifPresent(item -> item.setStatus(SettlementStatusValue.SETTLED));
-        syncNotifications();
+                .paymentNumber(generateNumber("PAY")).invoiceId(invoice.getId().toString()).customerName(invoice.getCustomerName())
+                .amount(amount).method(parseEnum(PaymentMethodValue.class, request.getMethod())).status(PaymentStatusValue.CAPTURED)
+                .paymentType(deposit ? PaymentTypeValue.DEPOSIT : invoice.getSettlementId() == null ? PaymentTypeValue.INVOICE : PaymentTypeValue.SETTLEMENT)
+                .reference(request.getReference()).requestKey(request.getRequestKey()).createdAtValue(now().toString()).build());
+        applyPayment(invoice, amount);
+        if (deposit && invoice.getBalanceDue() == 0) {
+            FleetRental rental = rentalRepository.findById(UUID.fromString(invoice.getRentalId())).orElseThrow();
+            rental.setDepositStatus(DepositStatusValue.HELD);
+            bookingRepository.findById(UUID.fromString(rental.getBookingId())).ifPresent(b -> b.setDepositStatus(DepositStatusValue.HELD));
+        }
+        if (invoice.getSettlementId() != null) {
+            FleetSettlement settlement = settlementRepository.findById(UUID.fromString(invoice.getSettlementId())).orElseThrow();
+            settlement.setAmountDue(invoice.getBalanceDue());
+            if (invoice.getBalanceDue() == 0 && settlement.getAmountRefundable() == 0) settlement.setStatus(SettlementStatusValue.SETTLED);
+        }
         return toPayment(payment);
     }
 
@@ -674,28 +730,31 @@ public class FleetService {
     }
 
     public Map<String, Object> processRefund(FleetDtos.RefundRequest request) {
-        FleetRefund refund = refundRepository.save(FleetRefund.builder()
-                .refundNumber(generateNumber("RFD"))
-                .invoiceId(request.getInvoiceId())
-                .settlementId(request.getSettlementId())
-                .customerName(request.getCustomerName())
-                .amount(round(request.getAmount()))
-                .reason(request.getReason())
-                .status(RefundStatusValue.PROCESSED)
-                .createdAtValue(now().toString())
-                .build());
-        if (request.getInvoiceId() != null && !request.getInvoiceId().isBlank()) {
-            FleetInvoice invoice = invoiceRepository.findById(UUID.fromString(request.getInvoiceId())).orElseThrow(() -> new ResourceNotFoundException("Invoice not found"));
-            applyRefund(invoice, refund.getAmount());
+        require(request.getSettlementId() != null && !request.getSettlementId().isBlank(), "Select the settlement for the deposit refund");
+        FleetSettlement settlement = lock(FleetSettlement.class, UUID.fromString(request.getSettlementId()));
+        Optional<FleetRefund> existing = refundRepository.findByRequestKey(request.getRequestKey());
+        if (existing.isPresent()) {
+            require(request.getSettlementId().equals(existing.get().getSettlementId()) && existing.get().getAmount() == round(request.getAmount()), "Refund request key was already used for another refund");
+            return toRefund(existing.get());
         }
-        if (request.getSettlementId() != null && !request.getSettlementId().isBlank()) {
-            FleetSettlement settlement = settlementRepository.findById(UUID.fromString(request.getSettlementId())).orElseThrow(() -> new ResourceNotFoundException("Settlement not found"));
-            settlement.setRefundId(refund.getId().toString());
-            settlement.setAmountRefundable(round(Math.max(0, settlement.getAmountRefundable() - refund.getAmount())));
-            settlement.setDepositRefunded(round(settlement.getDepositRefunded() + refund.getAmount()));
-            settlement.setStatus(SettlementStatusValue.REFUNDED);
-        }
-        syncNotifications();
+        double amount = round(request.getAmount());
+        require(amount > 0 && amount <= settlement.getAmountRefundable(), "Refund must be positive and cannot exceed the refundable deposit");
+        FleetRefund refund = refundRepository.save(FleetRefund.builder().refundNumber(generateNumber("RFD"))
+                .invoiceId(settlement.getInvoiceId()).settlementId(request.getSettlementId()).customerName(settlement.getCustomerName())
+                .amount(amount).reason(request.getReason()).reference(request.getReference()).requestKey(request.getRequestKey())
+                .status(RefundStatusValue.PROCESSED).createdAtValue(now().toString()).build());
+        settlement.setRefundId(refund.getId().toString());
+        settlement.setAmountRefundable(round(settlement.getAmountRefundable() - amount));
+        settlement.setDepositRefunded(round(settlement.getDepositRefunded() + amount));
+        if (settlement.getAmountRefundable() == 0) settlement.setStatus(SettlementStatusValue.REFUNDED);
+        refundRepository.findFirstBySettlementIdAndStatus(request.getSettlementId(), RefundStatusValue.PENDING).ifPresent(pending -> {
+            if (settlement.getAmountRefundable() == 0) refundRepository.delete(pending);
+            else pending.setAmount(settlement.getAmountRefundable());
+        });
+        rentalRepository.findById(UUID.fromString(settlement.getRentalId())).ifPresent(r -> {
+            r.setDepositStatus(settlement.getAmountRefundable() == 0 ? DepositStatusValue.REFUNDED : DepositStatusValue.PARTIALLY_REFUNDED);
+            bookingRepository.findById(UUID.fromString(r.getBookingId())).ifPresent(b -> b.setDepositStatus(r.getDepositStatus()));
+        });
         return toRefund(refund);
     }
 
@@ -917,7 +976,7 @@ public class FleetService {
                 .settlementId(settlementId)
                 .customerName(customerName)
                 .status(status)
-                .lineItems(lineItems)
+                .lineItems(new ArrayList<>(lineItems))
                 .subtotal(subtotal)
                 .taxTotal(taxTotal)
                 .total(total)
@@ -948,7 +1007,7 @@ public class FleetService {
     }
 
     private Pricing calculatePricingBreakdown(FleetRatePlan ratePlan, String vehicleClass, String pickupDateTime, String dropoffDateTime, double addOnTotal, Double overrideEstimatedTotal) {
-        int rentalDays = Math.max(1, (int) Math.ceil(ChronoUnit.HOURS.between(parseDateTime(pickupDateTime), parseDateTime(dropoffDateTime)) / 24.0));
+        int rentalDays = rentalDays(pickupDateTime, dropoffDateTime);
         double baseRate = ratePlan != null ? ratePlan.getDailyRate() : defaultBaseRate(vehicleClass);
         double discountTotal = 0;
         double subtotal = baseRate * rentalDays + addOnTotal - discountTotal;
@@ -957,18 +1016,9 @@ public class FleetService {
         return new Pricing(ratePlan != null ? ratePlan.getId().toString() : null, round(baseRate), rentalDays, round(addOnTotal), discountTotal, taxTotal, estimatedTotal);
     }
 
-    private ReturnCharge calculateReturnOutcome(String fuelIn, boolean damageFlag, boolean maintenanceFlag, int lateHours, double extraCharges) {
-        double lateCharge = lateHours > 0 ? lateHours * 15.0 : 0;
-        double fuelCharge = switch (fuelIn) {
-            case "Full" -> 0;
-            case "3/4" -> 20;
-            case "1/2" -> 45;
-            case "1/4" -> 75;
-            default -> 100;
-        };
-        double damageCharge = damageFlag ? 250 : 0;
-        double maintenanceCharge = maintenanceFlag ? 120 : 0;
-        double baseCharges = round(lateCharge + fuelCharge + damageCharge + maintenanceCharge);
+    private ReturnCharge calculateReturnOutcome(String fuelOut, String fuelIn, boolean damageFlag, boolean maintenanceFlag, int lateHours, double extraCharges) {
+        double fuelCharge = Math.max(0, fuelValue(fuelOut) - fuelValue(fuelIn));
+        double baseCharges = round(lateHours * 15.0 + fuelCharge);
         double totalCharges = round(baseCharges + extraCharges);
         ReturnOutcomeValue outcome = damageFlag ? ReturnOutcomeValue.DAMAGE_REVIEW_REQUIRED : maintenanceFlag ? ReturnOutcomeValue.MAINTENANCE_HOLD : totalCharges > 0 ? ReturnOutcomeValue.CHARGES_APPLIED : ReturnOutcomeValue.CLEAN_CLOSE;
         return new ReturnCharge(baseCharges, totalCharges, outcome);
@@ -1001,28 +1051,121 @@ public class FleetService {
     private void updateVehicleStatus(UUID vehicleId, VehicleOperationalStatusValue status) { Vehicle vehicle = vehicleRepository.findById(vehicleId).orElseThrow(() -> new ResourceNotFoundException("Vehicle not found")); vehicle.setStatus(switch (status) { case AVAILABLE -> "Available"; case RESERVED -> "Reserved"; case RENTED -> "Rented"; case MAINTENANCE -> "Maintenance"; case INSPECTION_HOLD -> "Inspection Hold"; }); }
     private String inferVehicleClass(Vehicle vehicle) { String model = vehicle.getModel().toLowerCase(Locale.ROOT); if (model.contains("rav4") || model.contains("cr-v") || model.contains("hr-v") || model.contains("qashqai") || model.contains("x-trail") || model.contains("cx-5") || model.contains("cx-9") || model.contains("explorer") || model.contains("glc") || model.contains("x5") || model.contains("model y") || model.contains("vezel")) return "SUV"; if (model.contains("alphard") || model.contains("transit") || model.contains("hiace") || model.contains("ranger") || model.contains("van")) return "Van"; return "Sedan"; }
     private String toOperationalStatus(String vehicleStatus) { return switch (vehicleStatus == null ? "" : vehicleStatus.toLowerCase(Locale.ROOT)) { case "reserved" -> "reserved"; case "rented" -> "rented"; case "maintenance" -> "maintenance"; case "inspection hold" -> "inspection_hold"; default -> "available"; }; }
-        private LocalDateTime parseDateTime(String value) {
-        if (value.endsWith("Z")) {
-            return java.time.OffsetDateTime.parse(value).toLocalDateTime();
+    @org.springframework.beans.factory.annotation.Value("${app.business-zone:Asia/Singapore}")
+    private String businessZone;
+
+    private LocalDateTime parseDateTime(String value) {
+        try {
+            var parsed = java.time.format.DateTimeFormatter.ISO_DATE_TIME.parseBest(value, java.time.OffsetDateTime::from, LocalDateTime::from);
+            if (parsed instanceof java.time.OffsetDateTime offset) return offset.atZoneSameInstant(java.time.ZoneId.of(businessZone)).toLocalDateTime();
+            return (LocalDateTime) parsed;
+        } catch (java.time.DateTimeException | NullPointerException ex) {
+            throw new IllegalArgumentException("Enter a valid pickup or return date and time");
         }
-        return LocalDateTime.parse(value);
     }
     private double defaultBaseRate(String vehicleClass) { return switch (vehicleClass) { case "SUV" -> 120; case "Van" -> 150; default -> 90; }; }
     private String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
     private boolean containsAny(String query, String... values) { for (String value : values) { if (value != null && value.toLowerCase(Locale.ROOT).contains(query)) return true; } return false; }
-    private String generateNumber(String prefix) { return prefix + "-" + System.currentTimeMillis(); }
+    private String generateNumber(String prefix) { return prefix + "-" + UUID.randomUUID().toString(); }
     private String generateId(String prefix) { return prefix + "-" + UUID.randomUUID().toString().substring(0, 8); }
     private LocalDateTime now() { return LocalDateTime.now(); }
-    private double round(double value) { return Math.round(value * 100.0) / 100.0; }
+    private double round(double value) {
+        if (!Double.isFinite(value)) throw new IllegalArgumentException("Money values must be finite");
+        return java.math.BigDecimal.valueOf(value).setScale(2, java.math.RoundingMode.HALF_UP).doubleValue();
+    }
     private <E extends Enum<E>> E parseEnum(Class<E> enumType, String value) { String normalized = value.trim().replace('-', '_').replace(' ', '_').toUpperCase(Locale.ROOT); return Enum.valueOf(enumType, normalized); }
     private String toLabel(Enum<?> value) { if (value == null) return null; return switch (value.name()) { case "CHECKED_OUT" -> "Checked Out"; case "PARTIALLY_REFUNDED" -> "Partially Refunded"; case "PARTIALLY_PAID" -> "Partially Paid"; case "DAMAGE_REVIEW_REQUIRED" -> "Damage Review Required"; case "MAINTENANCE_HOLD" -> "Maintenance Hold"; case "IN_TRANSIT" -> "In Transit"; case "BANK_TRANSFER" -> "Bank Transfer"; case "CORPORATE_CREDIT" -> "Corporate Credit"; case "ADD_ON" -> "Add-on"; default -> toTitleCase(value.name()); }; }
     private String toTitleCase(String text) { String[] parts = text.split("_"); StringBuilder builder = new StringBuilder(); for (int i = 0; i < parts.length; i++) { String part = parts[i].toLowerCase(Locale.ROOT); builder.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1)); if (i < parts.length - 1) builder.append(' '); } return builder.toString(); }
 
+
+    private <T> T lock(Class<T> type, UUID id) {
+        T value = entityManager.find(type, id, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (value == null) throw new ResourceNotFoundException("Record not found");
+        return value;
+    }
+
+    private void require(boolean condition, String message) {
+        if (!condition) throw new IllegalStateException(message);
+    }
+
+    private int rentalDays(String start, String end) {
+        var from = parseDateTime(start); var to = parseDateTime(end);
+        if (!to.isAfter(from)) throw new IllegalArgumentException("Return time must be after pickup time");
+        return Math.max(1, (int) Math.ceil(java.time.Duration.between(from, to).toSeconds() / 86400.0));
+    }
+
+    private double fuelValue(String fuel) {
+        return switch (fuel) { case "Full" -> 100; case "3/4" -> 80; case "1/2" -> 55; case "1/4" -> 25; case "Empty" -> 0; default -> throw new IllegalArgumentException("Select a valid fuel level"); };
+    }
+
+    private void validateCustomer(FleetCustomer customer, String returnTime, boolean handover) {
+        require(customer.getStatus() == CustomerStatusValue.ACTIVE, "Customer account must be active");
+        require(!java.time.LocalDate.parse(customer.getLicenseExpiry()).isBefore(parseDateTime(returnTime).toLocalDate()), "Driver licence expires before the rental ends");
+        if (handover) require(customer.getIdentityStatus() == CustomerIdentityStatusValue.VERIFIED, "Verify customer identity before handover");
+    }
+
+    private void validateAvailability(Vehicle vehicle, String start, String end, String bookingId, String rentalId, String vehicleClass) {
+        rentalDays(start, end);
+        require(java.util.Set.of("Available", "Reserved", "Rented").contains(vehicle.getStatus()), "Vehicle is on hold and cannot be allocated");
+        require(inferVehicleClass(vehicle).equalsIgnoreCase(vehicleClass), "Vehicle class does not match the booking");
+        var from = parseDateTime(start); var to = parseDateTime(end);
+        boolean bookingConflict = bookingRepository.findByAssignedVehicleId(vehicle.getId().toString()).stream()
+                .filter(b -> !b.getId().toString().equals(bookingId) && (b.getStatus() == BookingStatusValue.ASSIGNED || b.getStatus() == BookingStatusValue.CONFIRMED))
+                .anyMatch(b -> from.isBefore(parseDateTime(b.getDropoffDateTime())) && to.isAfter(parseDateTime(b.getPickupDateTime())));
+        boolean rentalConflict = rentalRepository.findByVehicleId(vehicle.getId().toString()).stream()
+                .filter(r -> !r.getId().toString().equals(rentalId) && !r.getBookingId().equals(bookingId) && r.getStatus() != RentalStatusValue.CLOSED)
+                .anyMatch(r -> r.getStatus() == RentalStatusValue.OVERDUE || from.isBefore(parseDateTime(r.getExpectedReturnDateTime())) && to.isAfter(parseDateTime(r.getPickupDateTime())));
+        require(!bookingConflict && !rentalConflict, "Vehicle is already allocated during this period");
+    }
+
+    private void refreshVehicleAvailability(UUID vehicleId) {
+        Vehicle vehicle = lock(Vehicle.class, vehicleId);
+        if (java.util.Set.of("Maintenance", "Inspection Hold").contains(vehicle.getStatus())) return;
+        var rentals = rentalRepository.findByVehicleId(vehicleId.toString());
+        if (rentals.stream().anyMatch(r -> r.getStatus() == RentalStatusValue.ACTIVE || r.getStatus() == RentalStatusValue.OVERDUE)) vehicle.setStatus("Rented");
+        else if (rentals.stream().anyMatch(r -> r.getStatus() == RentalStatusValue.RESERVED) || bookingRepository.findByAssignedVehicleId(vehicleId.toString()).stream().anyMatch(b -> b.getStatus() == BookingStatusValue.ASSIGNED)) vehicle.setStatus("Reserved");
+        else vehicle.setStatus("Available");
+    }
+
+    private Optional<FleetInvoice> rentalInvoice(FleetRental rental) {
+        return invoiceRepository.findByRentalId(rental.getId().toString()).stream()
+                .filter(i -> i.getSettlementId() == null && i.getLineItems().stream().anyMatch(line -> line.getCategory() == InvoiceItemCategoryValue.RENTAL)).findFirst();
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> previewBooking(FleetDtos.BookingRequest request) {
+        FleetRatePlan plan = findRatePlan(request.getVehicleClass());
+        Pricing pricing = calculatePricingBreakdown(plan, request.getVehicleClass(), request.getPickupDateTime(), request.getDropoffDateTime(), 0, null);
+        long available = vehicleRepository.findAll().stream().filter(v -> {
+            try { validateAvailability(v, request.getPickupDateTime(), request.getDropoffDateTime(), null, null, request.getVehicleClass()); return true; }
+            catch (IllegalStateException ex) { return false; }
+        }).count();
+        return Map.of("pricing", pricingDto(pricing.ratePlanId, pricing.baseRate, pricing.rentalDays, pricing.addOnTotal, pricing.discountTotal, pricing.taxTotal, pricing.estimatedTotal),
+                "deposit", plan == null ? 150 : plan.getDepositAmount(), "available", available, "currency", "SGD");
+    }
+
+    public Map<String, Object> bookCustomerTrip(FleetDtos.BookingRequest request) {
+        require(parseDateTime(request.getPickupDateTime()).isAfter(LocalDateTime.now(java.time.ZoneId.of(businessZone))), "Pickup must be in the future");
+        var available = vehicleRepository.findAll().stream().sorted(Comparator.comparing(Vehicle::getId)).toList();
+        for (Vehicle candidate : available) {
+            Vehicle vehicle = lock(Vehicle.class, candidate.getId());
+            try { validateAvailability(vehicle, request.getPickupDateTime(), request.getDropoffDateTime(), null, null, request.getVehicleClass()); }
+            catch (IllegalStateException ex) { continue; }
+            double deposit = findRatePlan(request.getVehicleClass()) == null ? 150 : findRatePlan(request.getVehicleClass()).getDepositAmount();
+            require(round(request.getDepositAmount()) == round(deposit), "The deposit has changed. Check availability and price again before confirming.");
+            request.setDepositAmount(findRatePlan(request.getVehicleClass()) == null ? 150 : findRatePlan(request.getVehicleClass()).getDepositAmount());
+            UUID id = (UUID) createBooking(request).get("id");
+            FleetBooking booking = bookingRepository.findById(id).orElseThrow();
+            require(round(request.getEstimatedTotal()) == booking.getEstimatedTotal(), "The price has changed. Check availability and price again before confirming.");
+            confirmBooking(id);
+            return assignVehicleToBooking(id, vehicle.getId().toString());
+        }
+        throw new IllegalStateException("No vehicle is available for these dates. Choose another class or time.");
+    }
+
     private record Pricing(String ratePlanId, double baseRate, int rentalDays, double addOnTotal, double discountTotal, double taxTotal, double estimatedTotal) {}
     private record ReturnCharge(double baseCharges, double totalCharges, ReturnOutcomeValue outcome) {}
 }
-
-
 
 
 

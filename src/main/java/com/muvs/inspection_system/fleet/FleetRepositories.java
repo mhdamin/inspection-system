@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 interface FleetCustomerRepository extends JpaRepository<FleetCustomer, UUID> {
+    Optional<FleetCustomer> findByPortalUsername(String username);
 }
 
 interface FleetRatePlanRepository extends JpaRepository<FleetRatePlan, UUID> {
@@ -14,24 +15,32 @@ interface FleetRatePlanRepository extends JpaRepository<FleetRatePlan, UUID> {
 }
 
 interface FleetBookingRepository extends JpaRepository<FleetBooking, UUID> {
+    List<FleetBooking> findByAssignedVehicleId(String vehicleId);
     List<FleetBooking> findByCustomerIdOrderByCreatedAtDesc(String customerId);
 }
 
 interface FleetRentalRepository extends JpaRepository<FleetRental, UUID> {
+    Optional<FleetRental> findFirstByBookingId(String bookingId);
+    List<FleetRental> findByVehicleId(String vehicleId);
     List<FleetRental> findByCustomerIdOrderByCreatedAtDesc(String customerId);
 }
 
 interface FleetReturnRepository extends JpaRepository<FleetReturn, UUID> {
+    Optional<FleetReturn> findFirstByRentalId(String rentalId);
 }
 
 interface FleetInvoiceRepository extends JpaRepository<FleetInvoice, UUID> {
+    List<FleetInvoice> findByRentalId(String rentalId);
     Optional<FleetInvoice> findFirstByRentalIdAndStatus(String rentalId, InvoiceStatusValue status);
 }
 
 interface FleetPaymentRepository extends JpaRepository<FleetPayment, UUID> {
+    Optional<FleetPayment> findByRequestKey(String requestKey);
 }
 
 interface FleetRefundRepository extends JpaRepository<FleetRefund, UUID> {
+    Optional<FleetRefund> findByRequestKey(String requestKey);
+    Optional<FleetRefund> findFirstBySettlementIdAndStatus(String settlementId, RefundStatusValue status);
 }
 
 interface FleetSettlementRepository extends JpaRepository<FleetSettlement, UUID> {

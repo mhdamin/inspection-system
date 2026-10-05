@@ -16,6 +16,32 @@ import java.util.stream.Collectors;
 @Slf4j
 @ControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleAuthentication(Exception ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ErrorResponse.builder()
+                .status(401).message("Invalid sign-in details. Please try again.")
+                .timestamp(LocalDateTime.now()).path(request.getRequestURI()).build());
+    }
+
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicate(Exception ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.builder()
+                .status(409).message("A matching record already exists. Refresh before trying again.")
+                .timestamp(LocalDateTime.now()).path(request.getRequestURI()).build());
+    }
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDenied(Exception ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ErrorResponse.builder()
+                .status(403).message("You do not have permission to perform this action")
+                .timestamp(LocalDateTime.now()).path(request.getRequestURI()).build());
+    }
+
+    @ExceptionHandler({IllegalStateException.class, org.springframework.dao.ConcurrencyFailureException.class})
+    public ResponseEntity<ErrorResponse> handleConflict(Exception ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.builder()
+                .status(409).message(ex instanceof IllegalStateException ? ex.getMessage() : "This record changed. Refresh and try again.")
+                .timestamp(LocalDateTime.now()).path(request.getRequestURI()).build());
+    }
     
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleResourceNotFoundException(
@@ -83,7 +109,7 @@ public class GlobalExceptionHandler {
         
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .message("An unexpected error occurred: " + ex.getMessage())
+                .message("An unexpected error occurred. Please try again or contact support.")
                 .timestamp(LocalDateTime.now())
                 .path(request.getRequestURI())
                 .build();

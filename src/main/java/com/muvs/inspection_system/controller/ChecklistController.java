@@ -24,7 +24,8 @@ public class ChecklistController {
     private final ChecklistService checklistService;
     
     @PostMapping
-    public ResponseEntity<UUID> createChecklist(@Valid @RequestBody ChecklistRequestDTO dto) {
+    public ResponseEntity<UUID> createChecklist(@Valid @RequestBody ChecklistRequestDTO dto, java.security.Principal principal) {
+        dto.setStaffName(principal.getName());
         log.info("POST /api/checklists - Creating checklist with number: {}", dto.getChecklistNumber());
         UUID checklistId = checklistService.createChecklist(dto);
         return new ResponseEntity<>(checklistId, HttpStatus.CREATED);
@@ -47,7 +48,8 @@ public class ChecklistController {
     @PutMapping("/{id}")
     public ResponseEntity<ChecklistResponseDTO> updateChecklist(
             @PathVariable UUID id,
-            @Valid @RequestBody ChecklistRequestDTO dto) {
+            @Valid @RequestBody ChecklistRequestDTO dto, java.security.Principal principal) {
+        dto.setStaffName(principal.getName());
         log.info("PUT /api/checklists/{} - Updating checklist", id);
         ChecklistResponseDTO updatedChecklist = checklistService.updateChecklist(id, dto);
         return ResponseEntity.ok(updatedChecklist);

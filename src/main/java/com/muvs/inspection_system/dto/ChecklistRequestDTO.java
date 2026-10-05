@@ -15,6 +15,10 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ChecklistRequestDTO {
+    private UUID rentalId;
+    private boolean completed;
+    @jakarta.validation.Valid
+    private InspectionEvidenceDTO evidence;
     
     @NotBlank(message = "Checklist number is required")
     private String checklistNumber;

@@ -28,7 +28,7 @@ enum BookingStatusValue { DRAFT, CONFIRMED, ASSIGNED, CANCELLED, CHECKED_OUT, CO
 enum RentalStatusValue { RESERVED, ACTIVE, OVERDUE, CLOSED }
 enum ReturnOutcomeValue { CLEAN_CLOSE, CHARGES_APPLIED, DAMAGE_REVIEW_REQUIRED, MAINTENANCE_HOLD }
 enum VehicleOperationalStatusValue { AVAILABLE, RESERVED, RENTED, MAINTENANCE, INSPECTION_HOLD }
-enum DepositStatusValue { HELD, APPLIED, PARTIALLY_REFUNDED, REFUNDED }
+enum DepositStatusValue { NOT_COLLECTED, HELD, APPLIED, PARTIALLY_REFUNDED, REFUNDED }
 enum InvoiceStatusValue { DRAFT, ISSUED, PAID, PARTIALLY_PAID, REFUNDED }
 enum PaymentStatusValue { PENDING, CAPTURED, FAILED, REFUNDED }
 enum PaymentMethodValue { CARD, BANK_TRANSFER, CASH, CORPORATE_CREDIT }
@@ -59,6 +59,8 @@ enum RefundStatusValue { PENDING, PROCESSED }
 @Entity
 @Table(name = "fleet_customers")
 class FleetCustomer extends BaseEntity {
+    @Column(unique = true)
+    private String portalUsername;
     @Column(nullable = false, unique = true)
     private String customerNumber;
     @Column(nullable = false)
@@ -94,10 +96,12 @@ class FleetRatePlan extends BaseEntity {
     @Column(nullable = false)
     private String vehicleClass;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double dailyRate;
     @Column(nullable = false)
     private int includedMileagePerDay;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositAmount;
     @Column(nullable = false)
     private double taxRate;
@@ -132,19 +136,25 @@ class FleetBooking extends BaseEntity {
     private String assignedVehicleId;
     private String assignedVehiclePlate;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double estimatedTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositAmount;
     private String ratePlanId;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double baseRate;
     @Column(nullable = false)
     private int rentalDays;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double addOnTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double discountTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double taxTotal;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -192,22 +202,28 @@ class FleetRental extends BaseEntity {
     private String fuelOut;
     private String fuelIn;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositAmount;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private DepositStatusValue depositStatus;
     private String ratePlanId;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double baseRate;
     @Column(nullable = false)
     private int rentalDays;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double addOnTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double discountTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double taxTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double estimatedTotal;
     @ElementCollection
     @CollectionTable(name = "fleet_rental_add_ons", joinColumns = @JoinColumn(name = "rental_id"))
@@ -253,10 +269,13 @@ class FleetReturn extends BaseEntity {
     @Column(nullable = false)
     private int lateHours;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double baseCharges;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double extraCharges;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double totalCharges;
     private String settlementId;
     @Enumerated(EnumType.STRING)
@@ -277,6 +296,7 @@ class FleetInvoiceLineItem {
     @Column(name = "line_item_id")
     private String id;
     private String label;
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amount;
     @Enumerated(EnumType.STRING)
     private InvoiceItemCategoryValue category;
@@ -305,14 +325,19 @@ class FleetInvoice extends BaseEntity {
     @Builder.Default
     private List<FleetInvoiceLineItem> lineItems = new ArrayList<>();
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double subtotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double taxTotal;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double total;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amountPaid;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double balanceDue;
     @Column(nullable = false)
     private String issuedAt;
@@ -326,6 +351,9 @@ class FleetInvoice extends BaseEntity {
 @Entity
 @Table(name = "fleet_payments")
 class FleetPayment extends BaseEntity {
+    private String reference;
+    @Column(unique = true)
+    private String requestKey;
     @Column(nullable = false, unique = true)
     private String paymentNumber;
     @Column(nullable = false)
@@ -333,6 +361,7 @@ class FleetPayment extends BaseEntity {
     @Column(nullable = false)
     private String customerName;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amount;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -355,6 +384,9 @@ class FleetPayment extends BaseEntity {
 @Entity
 @Table(name = "fleet_refunds")
 class FleetRefund extends BaseEntity {
+    private String reference;
+    @Column(unique = true)
+    private String requestKey;
     @Column(nullable = false, unique = true)
     private String refundNumber;
     private String invoiceId;
@@ -362,6 +394,7 @@ class FleetRefund extends BaseEntity {
     @Column(nullable = false)
     private String customerName;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amount;
     @Column(nullable = false, length = 2000)
     private String reason;
@@ -391,19 +424,25 @@ class FleetSettlement extends BaseEntity {
     @Column(nullable = false)
     private String vehiclePlate;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositHeld;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositApplied;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double depositRefunded;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double returnCharges;
     @Column(nullable = false)
     private String invoiceId;
     private String refundId;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amountDue;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double amountRefundable;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -437,6 +476,7 @@ class FleetWorkOrder extends BaseEntity {
     private String assignee;
     private String vendor;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double estimatedCost;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -469,6 +509,7 @@ class FleetDamageCase extends BaseEntity {
     @Column(nullable = false)
     private DamageSeverityValue severity;
     @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = MoneyConverter.class)
     private double estimatedRepairCost;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
