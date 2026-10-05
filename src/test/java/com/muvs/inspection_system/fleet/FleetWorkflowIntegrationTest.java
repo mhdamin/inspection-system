@@ -19,7 +19,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
-@SpringBootTest(properties = {"spring.datasource.url=jdbc:h2:mem:workflow;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop", "aws.s3.enabled=false", "app.seed-demo-data=false", "aws.s3.access-key=test", "aws.s3.secret-key=test"})
+@SpringBootTest(properties = {"app.cors.allowed-origins=https://demo.example.test", "spring.datasource.url=jdbc:h2:mem:workflow;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.jpa.hibernate.ddl-auto=create-drop", "aws.s3.enabled=false", "app.seed-demo-data=false", "aws.s3.access-key=test", "aws.s3.secret-key=test"})
 @AutoConfigureMockMvc
 @Transactional
 class FleetWorkflowIntegrationTest {
@@ -66,6 +66,13 @@ class FleetWorkflowIntegrationTest {
         FleetDtos.PaymentCreateRequest payment=new FleetDtos.PaymentCreateRequest(); payment.setInvoiceId(invoice.getId().toString()); payment.setAmount(150); payment.setMethod("Cash"); payment.setReference("Receipt 123"); payment.setRequestKey(UUID.randomUUID().toString());
         fleet.createPayment(payment); fleet.createPayment(payment);
         assertThat(invoice.getAmountPaid()).isEqualTo(150);
+    }
+    @Test void corsAllowsConfiguredFrontendAndRejectsOtherOrigins() throws Exception {
+        mvc.perform(options("/api/auth/login").header("Origin","https://demo.example.test")
+                .header("Access-Control-Request-Method","POST"))
+                .andExpect(status().isOk()).andExpect(header().string("Access-Control-Allow-Origin","https://demo.example.test"));
+        mvc.perform(options("/api/auth/login").header("Origin","https://untrusted.example.test")
+                .header("Access-Control-Request-Method","POST")).andExpect(status().isForbidden());
     }
     @Test void anonymousCannotRegisterPrivilegedUser() throws Exception {
         mvc.perform(post("/api/auth/register").contentType("application/json").content("{\"username\":\"attacker\",\"password\":\"long-password\",\"roles\":[\"ROLE_SUPERADMIN\"]}")).andExpect(status().isUnauthorized());

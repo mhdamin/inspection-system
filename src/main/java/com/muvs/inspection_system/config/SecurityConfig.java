@@ -32,6 +32,9 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final UserDetailsService userDetailsService;
 
+    @org.springframework.beans.factory.annotation.Value("${app.cors.allowed-origins:https://fleet.amindoestech.space,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}")
+    private String allowedOrigins;
+
     @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
@@ -82,14 +85,9 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Strict production allow-list + explicit local development origins
-        configuration.setAllowedOrigins(List.of(
-                "https://fleet.amindoestech.space",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173"
-        ));
+        // Exact deployment origins; never grant wildcard credentialed access.
+        configuration.setAllowedOrigins(java.util.Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim).filter(origin -> !origin.isEmpty()).toList());
 
         // Allow specific HTTP methods
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));

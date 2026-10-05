@@ -71,3 +71,6 @@ Dockerfile
 *.tmp
 *.bak
 *.backup
+
+# Local dependency caches and deployment tools
+.m2repo/
